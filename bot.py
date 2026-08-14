@@ -367,24 +367,6 @@ async def ask_torts(interaction: discord.Interaction, question: str):
     clip = clip_file(audio, "ask-torts")
     await interaction.followup.send(f"**Q:** {question}"[:2000], file=clip)
 
-SCOUT_PROMPT = """You are a Canadian hockey guy giving a real scouting report on a
-player, blunt and to the point. HARD CAP 200 words.
-
-Get to the point immediately -- first sentence is who he is and your actual
-verdict. No windup.
-
-You are given REAL stats and PRE-COMPUTED verdicts calculated by code. Relay
-what the data actually says -- every number you use must appear verbatim in
-the data given to you. Never invent stats, and never comment on passing,
-positioning, hockey IQ, chemistry, or attitude -- you do not have that data.
-
-Frame his grade against the position he actually plays most (use the games
-played data), not a generic ceiling. Focus on the ONE standout trait you're
-given -- don't survey every stat in the same order every time, that's why
-scouts all read the same. 2-3 numbers total, not a stat dump.
-
-Profanity is fine. Blunt, funny when it's earned, no corporate hedging."""
-
 # The card shows every number already, so the read exists to say what they
 # MEAN. Short, because it sits in a fixed-height block on the card.
 CARD_READ_PROMPT = """You write the headline read at the TOP of a scouting
@@ -413,140 +395,91 @@ invent stats, never do arithmetic, and never comment on passing, positioning,
 hockey IQ, chemistry or attitude -- you have no data for those. Frame him
 against the position he actually plays most."""
 
-async def _run_scout(interaction: discord.Interaction, gamertag: str, voice: bool,
-                      voice_prompt: str = None, voice_id: str = None, clip_name: str = "scout-buddy",
-                      ramped: bool = False):
+VOICES = {
+    "buddy": (lambda: vc.VOICE_PROMPT, lambda: vc.VOICE_ID, False),
+    "trump": (lambda: vc.TRUMP_SCOUT_PROMPT, lambda: vc.TRUMP_VOICE_ID, False),
+    "torts": (lambda: vc.TORTS_SCOUT_PROMPT, lambda: vc.TORTS_VOICE_ID, True),
+}
+
+
+@tree.command(name="pubscout", description="Scout an EA NHL player by gamertag")
+@app_commands.describe(gamertag="EA gamertag to look up",
+                       voice="Optionally have the report read out loud")
+@app_commands.autocomplete(gamertag=gamertag_autocomplete)
+@app_commands.choices(voice=[
+    app_commands.Choice(name="Canadian hockey guy", value="buddy"),
+    app_commands.Choice(name="Tortorella", value="torts"),
+    app_commands.Choice(name="Trump", value="trump"),
+])
+async def pubscout(interaction: discord.Interaction, gamertag: str,
+                   voice: app_commands.Choice[str] = None):
+    """The card is the report. A voice choice adds a clip alongside it."""
     await interaction.response.defer()
     m = await ea.search_player(gamertag)
     if not m:
         await interaction.followup.send(f"No player found for `{gamertag}`.")
         return
 
-    verdicts = ea.grade_positions(m)
     standout = ea.standout_trait(m)
-    data_block = ea.format_stats(m) + "\n\nVERDICTS (computed, not your opinion):\n" + "\n".join(verdicts)
+    primary = (card._positions(m) or [("?", 0)])[0][0]
+    rates = card._rates(m)
+    pcts = []
+    for key in card.ROWS_BY_POS.get(primary, []):
+        if key in rates:
+            pc = card.percentile(primary, key, rates[key])
+            if pc is not None:
+                pcts.append(f"  {card.LABELS[key]}: {pc}th percentile among {primary} "
+                            f"(his rate {rates[key]:.2f})")
+    block = ea.format_stats(m)
+    block += (f"\n\nPERCENTILE RANKS vs other {primary} with 50+ games -- these are what "
+              f"the card shows, do not contradict them:\n" + "\n".join(pcts))
     if standout:
-        data_block += f"\n\nSTANDOUT TRAIT to focus on: {standout['trait']} -- {standout['grade']} ({standout['detail']})"
+        block += (f"\n\nSTANDOUT TRAIT to focus on: {standout['trait']} -- "
+                  f"{standout['grade']} ({standout['detail']})")
 
-    try:
-        resp = await call_llm(
-            messages=[
-                {"role": "system", "content": (voice_prompt or vc.VOICE_PROMPT) if voice else SCOUT_PROMPT},
-                {"role": "user", "content": data_block},
-            ],
-            max_tokens=220 if voice else 500,
-            temperature=0.9 if voice else 0.5,
-        )
-        answer = (resp.choices[0].message.content or "").strip()
-        answer = ea.enforce_grade_word(answer, standout)
-    except Exception as e:
-        await interaction.followup.send(f"OpenRouter shit the bed: `{type(e).__name__}: {e}`")
-        return
-
-    body = answer or "Got nothing back. Try again."
-    footer = f"\n\n{ea.pos_line(m)}\n{ea.stat_footer(m)}"
-
-    if voice:
-        try:
-            if ramped:
-                audio, engine = await vc.speak_ramped(
-                    body, voice_id or vc.TORTS_VOICE_ID, vc.TORTS_SPEED_START, vc.TORTS_SPEED_END,
-                    end_gain=vc.TORTS_GAIN_END, steps=vc.TORTS_RAMP_STEPS,
-                    temp_start=vc.TORTS_TTS_TEMP_START, temp_end=vc.TORTS_TTS_TEMP_END,
-                )
-            else:
-                audio, engine = await vc.speak(body, voice_id=voice_id or vc.VOICE_ID)
-        except Exception as e:
-            await interaction.followup.send(
-                f"Voice shit the bed: `{type(e).__name__}: {e}`\n\n**{m.get('name')}**{footer}"[:2000]
-            )
-            return
-        clip = clip_file(audio, clip_name)
-        await interaction.followup.send(f"**{m.get('name')}**{footer}"[:2000], file=clip)
-        return
-    await interaction.followup.send(f"{body}{footer}"[:2000])
-
-@tree.command(name="scout", description="Scout an EA NHL player by gamertag")
-@app_commands.describe(gamertag="EA gamertag to look up")
-@app_commands.autocomplete(gamertag=gamertag_autocomplete)
-async def scout(interaction: discord.Interaction, gamertag: str):
-    await _run_scout(interaction, gamertag, voice=False)
-
-@tree.command(name="scout-buddy", description="Same scout, chirped out loud by the Canadian hockey guy")
-@app_commands.describe(gamertag="EA gamertag to look up")
-@app_commands.autocomplete(gamertag=gamertag_autocomplete)
-async def scout_buddy(interaction: discord.Interaction, gamertag: str):
-    await _run_scout(interaction, gamertag, voice=True)
-
-@tree.command(name="scout-trump", description="Same scout, delivered in a Trump impression")
-@app_commands.describe(gamertag="EA gamertag to look up")
-@app_commands.autocomplete(gamertag=gamertag_autocomplete)
-async def scout_trump(interaction: discord.Interaction, gamertag: str):
-    await _run_scout(
-        interaction, gamertag, voice=True,
-        voice_prompt=vc.TRUMP_SCOUT_PROMPT, voice_id=vc.TRUMP_VOICE_ID, clip_name="scout-trump",
-    )
-
-@tree.command(name="mc", description="Branded ChelScout card for an EA NHL player")
-@app_commands.describe(gamertag="EA gamertag to look up")
-@app_commands.autocomplete(gamertag=gamertag_autocomplete)
-async def mc(interaction: discord.Interaction, gamertag: str):
-    await interaction.response.defer()
-    m = await ea.search_player(gamertag)
-    if not m:
-        await interaction.followup.send(f"No player found for `{gamertag}`.")
-        return
-
-    # The written read is the only cost here; the card itself is pure CPU. If
-    # the model fails, the card still renders -- it just goes out without prose.
+    # The card still renders if the model call fails -- it just goes out
+    # without the written read.
     read = None
     try:
-        standout = ea.standout_trait(m)
-        # The read is fed the SAME percentiles the bars are drawn from. Feeding
-        # it the band words instead let the prose call a 53rd-percentile player
-        # "heavy" while the bar underneath said average -- the card contradicted
-        # itself in the reader's eye.
-        primary = (card._positions(m) or [("?", 0)])[0][0]
-        rates = card._rates(m)
-        pcts = []
-        for key in card.ROWS_BY_POS.get(primary, []):
-            if key in rates:
-                pc = card.percentile(primary, key, rates[key])
-                if pc is not None:
-                    pcts.append(f"  {card.LABELS[key]}: {pc}th percentile "
-                                f"among {primary} (his rate {rates[key]:.2f})")
-        block = ea.format_stats(m)
-        block += (f"\n\nPERCENTILE RANKS vs other {primary} with 50+ games -- these are "
-                  f"what the card shows, do not contradict them:\n" + "\n".join(pcts))
-        if standout:
-            block += (f"\n\nSTANDOUT TRAIT to focus on: {standout['trait']} -- "
-                      f"{standout['grade']} ({standout['detail']})")
         resp = await call_llm(
             messages=[{"role": "system", "content": CARD_READ_PROMPT},
                       {"role": "user", "content": block}],
-            max_tokens=160, temperature=0.6,
-        )
+            max_tokens=160, temperature=0.6)
         read = ea.enforce_grade_word((resp.choices[0].message.content or "").strip(), standout)
     except Exception as e:
-        print(f"[minicard] read failed, rendering without it: {type(e).__name__}: {e}")
+        print(f"[pubscout] read failed: {type(e).__name__}: {e}")
 
     try:
         png = await asyncio.to_thread(card.render, m, read)
     except Exception as e:
         await interaction.followup.send(f"Card render shit the bed: `{type(e).__name__}: {e}`")
         return
-    f = discord.File(io.BytesIO(png), filename=f"{CLIP_BRAND}-minicard-{m.get('name')}.png")
-    await interaction.followup.send(file=f)
+    files = [discord.File(io.BytesIO(png),
+                          filename=f"{CLIP_BRAND}-pubscout-{m.get('name')}.png")]
 
-@tree.command(name="scout-torts", description="Same scout, delivered like a Torts presser")
-@app_commands.describe(gamertag="EA gamertag to look up")
-@app_commands.autocomplete(gamertag=gamertag_autocomplete)
-async def scout_torts(interaction: discord.Interaction, gamertag: str):
-    await _run_scout(
-        interaction, gamertag, voice=True,
-        voice_prompt=vc.TORTS_SCOUT_PROMPT, voice_id=vc.TORTS_VOICE_ID, clip_name="scout-torts",
-        ramped=True,
-    )
+    if voice:
+        prompt_fn, vid_fn, ramped = VOICES[voice.value]
+        try:
+            resp = await call_llm(
+                messages=[{"role": "system", "content": prompt_fn()},
+                          {"role": "user", "content": block}],
+                max_tokens=220, temperature=0.9)
+            script = ea.enforce_grade_word((resp.choices[0].message.content or "").strip(), standout)
+            if ramped:
+                audio, _ = await vc.speak_ramped(
+                    script, vid_fn(), vc.TORTS_SPEED_START, vc.TORTS_SPEED_END,
+                    end_gain=vc.TORTS_GAIN_END, steps=vc.TORTS_RAMP_STEPS,
+                    temp_start=vc.TORTS_TTS_TEMP_START, temp_end=vc.TORTS_TTS_TEMP_END)
+            else:
+                audio, _ = await vc.speak(script, voice_id=vid_fn())
+            files.append(discord.File(io.BytesIO(audio),
+                                      filename=f"{CLIP_BRAND}-pubscout-{voice.value}.mp3"))
+        except Exception as e:
+            # a failed clip must not cost the user his card
+            print(f"[pubscout] voice failed: {type(e).__name__}: {e}")
+
+    await interaction.followup.send(files=files)
+
 
 @client.event
 async def on_ready():
