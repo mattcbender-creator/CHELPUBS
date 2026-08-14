@@ -166,9 +166,11 @@ def metrics(players: list[dict]) -> dict[str, dict[str, list[float]]]:
     """
     cols: dict[str, dict[str, list[float]]] = {}
 
+    METRICS = ("production", "scoring", "playmaking", "physicality", "discipline",
+               "impact", "savepct", "gaa", "workload", "shutouts")
+
     def bucket(pos: str) -> dict[str, list[float]]:
-        return cols.setdefault(pos, {k: [] for k in
-                                     ("production", "physicality", "discipline", "impact", "savepct", "gaa")})
+        return cols.setdefault(pos, {k: [] for k in METRICS})
 
     for m in players:
         pos, pos_gp = primary_position(m)
@@ -188,13 +190,23 @@ def metrics(players: list[dict]) -> dict[str, dict[str, list[float]]]:
             gaa = ea._num(m.get("glgaa"))
             if gaa > 0:
                 b["gaa"].append(gaa)
+            # How busy he is, and how often he shuts the door completely.
+            b["workload"].append(ea._num(m.get("glsaves")) / glgp)
+            b["shutouts"].append(ea._num(m.get("glso")) / glgp)
             continue
 
         if skater_gp < MIN_POOL_GP:
             continue
-        pts = ea._num(m.get("skgoals")) + ea._num(m.get("skassists"))
+        goals = ea._num(m.get("skgoals"))
+        assists = ea._num(m.get("skassists"))
+        pts = goals + assists
+        # Scoring and playmaking are split out: "can he finish" and "can he set
+        # up" are different scouting questions, and a combined points rate hides
+        # which one a player actually is.
         vals = {
             "production": pts / skater_gp,
+            "scoring": goals / skater_gp,
+            "playmaking": assists / skater_gp,
             "physicality": ea._num(m.get("skhits")) / skater_gp,
             "discipline": ea._num(m.get("skpim")) / skater_gp,
             "impact": ea._num(m.get("skplusmin")) / skater_gp,
