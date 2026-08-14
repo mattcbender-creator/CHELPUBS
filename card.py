@@ -44,11 +44,19 @@ LINE = (40, 44, 54)
 TEXT = (240, 242, 246)
 MUTED = (138, 143, 158)
 DIM = (92, 97, 112)
-BLUE = (59, 142, 245)      # above average
-RED = (229, 72, 77)        # below average
-NEUTRAL = (110, 115, 130)  # at the midpoint
+BLUE = (59, 142, 245)      # brand accent only, never a rating
+# Rating scale. Red/green is the classic colour-blind failure, so the green is
+# pushed toward teal: that is what carries the pair past the CVD threshold.
+# Validated on the dark surface, all pairs above the dE 8 target:
+#   #E5484D L=.626 | #C4841F L=.663 | #2A9D8F L=.630
+#   red/amber protan 17.8 deutan 12.8 - red/green protan 18.0 deutan 9.7
+#   amber/green protan 12.3 deutan 17.9
+RED = (229, 72, 77)        # weak, bender, shitter
+AMBER = (196, 132, 31)     # mid
+GREEN = (42, 157, 143)     # solid, stud, elite
+NEUTRAL = (110, 115, 130)
 
-W = 1080
+W = 940
 PAD = 60
 MID_TOL = 4  # percentile points either side of 50 that count as "average"
 
@@ -69,6 +77,10 @@ ROWS_BY_POS = {
     "D":  ["impact", "physicality", "playmaking", "discipline"],
     "G":  ["savepct", "gaa", "workload", "shutouts"],
 }
+
+# Used in the compact secondary block, where a long label runs into its value.
+SHORT_LABELS = {"savepct": "SV%", "gaa": "GAA", "scoring": "GOALS",
+                "playmaking": "ASSISTS", "impact": "+/-", "workload": "SAVES"}
 
 LABELS = {
     "scoring": "SCORING", "playmaking": "PLAYMAKING", "production": "PRODUCTION",
@@ -149,7 +161,7 @@ TIERS = [
     (62, "SOLID"),
     (45, "MID"),
     (30, "WEAK"),
-    (15, "BENDER"),
+    (15, "BAD"),
     (0,  "SHITTER"),
 ]
 
@@ -162,11 +174,13 @@ def tier(p: int) -> str:
 
 
 def _pole(p: int) -> tuple:
-    if p >= 50 + MID_TOL:
-        return BLUE
-    if p <= 50 - MID_TOL:
-        return RED
-    return NEUTRAL
+    """Bar colour by tier. Redundant with bar length on purpose -- the point is
+    that a glance at colour answers 'good or bad' before length is read."""
+    if p >= 62:
+        return GREEN
+    if p >= 45:
+        return AMBER
+    return RED
 
 
 def _ordinal(n: int) -> str:
@@ -217,6 +231,33 @@ def _verdict(primary: str, rows: list, is_goalie: bool) -> str:
     return f"{tier(best[1])} {best[0]}  ·  {tier(worst[1])} {worst[0]}"
 
 
+def _bar_row(d, y, lbl, metric, value, p, f_lbl, f_val, f_small, small=False):
+    """One rating row: label, raw rate, bar, tier word.
+
+    The bar runs the full width left to right -- 0 at the left, best at the
+    right -- rather than diverging from a midpoint. Colour and length both
+    encode the same rank on purpose: colour answers "good or bad" at a glance,
+    length gives the degree, and the printed tier word means the reading never
+    depends on colour alone.
+    """
+    h = 12 if small else 16
+    x0 = PAD + (172 if small else 230)
+    x1 = W - PAD - (132 if small else 168)
+    _text(d, (PAD + (24 if small else 0), y + 2), lbl, f_lbl, MUTED if small else TEXT)
+    d.rounded_rectangle([x0, y + 6, x1, y + 6 + h], radius=h // 2, fill=(30, 34, 43))
+    if p is not None:
+        col = _pole(p)
+        w = max((x1 - x0) * p / 100, h)
+        d.rounded_rectangle([x0, y + 6, x0 + w, y + 6 + h], radius=h // 2, fill=col)
+        _text(d, (W - PAD, y - 2), tier(p), f_val, TEXT, anchor="ra")
+        if not small:
+            _text(d, (W - PAD, y + 21), _ordinal(p), f_small, DIM, anchor="ra")
+    else:
+        _text(d, (W - PAD, y + 2), "n/a", f_val, DIM, anchor="ra")
+    _text(d, (x0 - 16, y + 2), _fmt(metric, value), f_val, MUTED, anchor="ra")
+    return y + (36 if small else 50)
+
+
 def render(m: dict, read: str | None = None) -> bytes:
     """Draw the card for one player. `read` is optional prose under the stats."""
     name = str(m.get("name") or "unknown")
@@ -258,6 +299,26 @@ def render(m: dict, read: str | None = None) -> bytes:
             continue
         rows.append((LABELS[key], key, rates[key], percentile(primary, key, rates[key])))
 
+    # The other role he plays, ranked in ITS pool -- a goalie's skater numbers
+    # are compared to skaters, never to goalies.
+    sec_rows, sec_header = [], ""
+    if is_goalie and skater_gp >= 10:
+        sec_pos = next((pos for pos, _ in posns if pos != "G"), None)
+        if sec_pos:
+            # skater_gp is his total out-of-net games; sec_pos is only where
+            # he played most of them, and the pool he is ranked against.
+            sec_header = f"ALSO SKATES  ·  {skater_gp:.0f} GP  ·  RANKED VS {sec_pos}"
+            for key in ("scoring", "playmaking", "impact"):
+                if key in rates:
+                    sec_rows.append((LABELS[key], key, rates[key],
+                                     percentile(sec_pos, key, rates[key])))
+    elif not is_goalie and glgp >= 10:
+        sec_header = f"ALSO PLAYS NET  ·  {glgp:.0f} GP  ·  RANKED VS G"
+        for key in ("savepct", "gaa"):
+            if key in rates:
+                sec_rows.append((LABELS[key], key, rates[key],
+                                 percentile("G", key, rates[key])))
+
     verdict = _verdict(primary, rows, is_goalie)
 
     read_lines: list[str] = []
@@ -282,7 +343,7 @@ def render(m: dict, read: str | None = None) -> bytes:
          + 62           # position strip
          + 132          # stat tiles
          + (92 if not is_goalie and points else 0)   # play-style axis
-         + (60 if ((not is_goalie and glgp >= 10) or (is_goalie and skater_gp >= 10)) else 0)
+         + (54 + len(sec_rows) * 36 + 22 if sec_rows else 0)
          + 62           # bars header + legend
          + len(rows) * 52
          + 74)
@@ -317,27 +378,24 @@ def render(m: dict, read: str | None = None) -> bytes:
         _text(d, (PAD, y), verdict[:46], f_verdict, BLUE)
         y += 44
 
-    # ---- position strip: share of games, primary called out explicitly
-    _text(d, (PAD, y), "POSITIONS", f_statlbl, DIM)
-    y += 26
-    total = sum(n for _, n in posns) or 1
+    # ---- positions as chips. The old proportional strip turned every
+    # secondary role into an unlabelled sliver -- a 515-game goalie's 40 games
+    # at centre became 3 pixels. Chips give every position the same legible
+    # box and put the games played right next to it.
+    _text(d, (PAD, y), "GAMES BY POSITION", f_statlbl, DIM)
+    y += 30
     x = PAD
-    barw = W - 2 * PAD
     for i, (pos, n) in enumerate(posns):
-        seg = barw * n / total
-        # 3px of the segment goes to the gap between fills, so anything
-        # narrower than that has no width left to draw.
-        if seg < 6:
-            x += seg
-            continue
-        col = BLUE if i == 0 else (PANEL if i > 1 else (46, 58, 78))
-        d.rounded_rectangle([x, y, x + seg - 3, y + 30], radius=5, fill=col)
-        if seg > 78:
-            _text(d, (x + 12, y + 6), pos, f_pos, TEXT if i == 0 else MUTED)
-            _text(d, (x + 12 + d.textlength(pos, font=f_pos) + 8, y + 9),
-                  f"{n}", f_posn, TEXT if i == 0 else DIM)
-        x += seg
-    y += 40
+        label = f"{pos} {n}"
+        cw = d.textlength(label, font=f_pos) + 34
+        if x + cw > W - PAD:
+            break
+        d.rounded_rectangle([x, y, x + cw, y + 42], radius=8,
+                            fill=BLUE if i == 0 else PANEL)
+        _text(d, (x + cw / 2, y + 21), label, f_pos,
+              TEXT if i == 0 else MUTED, anchor="mm")
+        x += cw + 10
+    y += 60
 
     # ---- headline tiles
     tiles = ([("SV%", _fmt("savepct", rates.get("savepct", 0))),
@@ -377,57 +435,34 @@ def render(m: dict, read: str | None = None) -> bytes:
               f_note, DIM, anchor="ma")
         y += 34
 
-    # ---- a skater who also plays net, or a goalie who also skates.
-    # Plenty of pubs players do both, and a card that hides half of it is
-    # telling you the wrong thing about who you just looked up.
-    other = None
-    if not is_goalie and glgp >= 10:
-        other = (f"ALSO PLAYS NET: {glgp:.0f} GP  ·  "
-                 f"{_fmt('savepct', rates.get('savepct', 0))} SV%  ·  "
-                 f"{_fmt('gaa', rates.get('gaa', 0))} GAA")
-    elif is_goalie and skater_gp >= 10:
-        other = (f"ALSO SKATES: {skater_gp:.0f} GP  ·  "
-                 f"{points:.0f} P  ·  {points / skater_gp:.2f} P/GP")
-    if other:
-        d.rounded_rectangle([PAD, y, W - PAD, y + 44], radius=10, fill=PANEL)
-        _text(d, (PAD + 18, y + 13), other, f_note, MUTED)
-        y += 60
-
-    # ---- diverging percentile bars
+    # ---- rating bars
     ref = _breakpoints(primary, rows[0][1])[1] if rows else primary
     n_pool = max(pool().get("counts", {}).get(ref, {}).values() or [0])
     ref_name = "FORWARDS" if ref == "F" else primary
     _text(d, (PAD, y), f"RANKED VS {n_pool} {ref_name} WITH 50+ GAMES", f_statlbl, DIM)
     y += 24
-    _text(d, (PAD, y), "centre line = average player · right is better", f_note, DIM)
+    _text(d, (PAD, y), "longer and greener is better · 50th is a typical player", f_note, DIM)
     y += 30
 
-    x0, x1 = PAD + 210, W - PAD - 164
-    mid = (x0 + x1) / 2
-    bars_top = y + 10
     for lbl, metric, value, p in rows:
-        _text(d, (PAD, y + 8), lbl, f_bar, TEXT)
-        d.rounded_rectangle([x0, y + 12, x1, y + 30], radius=4, fill=(28, 32, 40))
-        if p is not None:
-            col = _pole(p)
-            half = (x1 - x0) / 2
-            off = half * (p - 50) / 50
-            if abs(p - 50) <= MID_TOL:
-                d.rounded_rectangle([mid - 3, y + 12, mid + 3, y + 30], radius=3, fill=col)
-            elif off > 0:
-                d.rounded_rectangle([mid, y + 12, mid + off, y + 30], radius=4, fill=col)
-            else:
-                d.rounded_rectangle([mid + off, y + 12, mid, y + 30], radius=4, fill=col)
-            _text(d, (W - PAD, y + 1), tier(p), f_val, TEXT, anchor="ra")
-            _text(d, (W - PAD, y + 24), _ordinal(p), f_note, DIM, anchor="ra")
-        else:
-            _text(d, (W - PAD, y + 8), "n/a", f_val, DIM, anchor="ra")
-        # raw rate, so the card shows the actual number and not only a rank
-        _text(d, (x0 - 16, y + 9), _fmt(metric, value), f_val, MUTED, anchor="ra")
-        y += 52
-    # One reference line spanning every row, drawn last so it reads as a scale
-    # rather than as part of any single bar.
-    d.line([mid, bars_top, mid, y - 16], fill=(150, 156, 172), width=2)
+        y = _bar_row(d, y, lbl, metric, value, p, f_bar, f_val, f_note)
+
+    # ---- his other job, if he has one.
+    # Plenty of pubs players split time between net and out. Which set of stats
+    # someone wants depends on why they are scouting, and there is no way to
+    # know that from a gamertag -- so the card leads with the position he
+    # actually plays most and appends the other role underneath at a smaller
+    # size, rather than picking one and hiding the rest.
+    if sec_rows:
+        y += 8
+        d.rounded_rectangle([PAD, y, W - PAD, y + 46 + len(sec_rows) * 36], radius=12,
+                            fill=(18, 21, 27))
+        _text(d, (PAD + 24, y + 15), sec_header, f_statlbl, MUTED)
+        y += 46
+        for lbl, metric, value, p in sec_rows:
+            y = _bar_row(d, y, SHORT_LABELS.get(metric, lbl), metric, value, p,
+                         f_note, f_note, f_note, small=True)
+        y += 14
 
     # ---- footer
     y = H - 56
