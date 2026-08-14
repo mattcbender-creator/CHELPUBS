@@ -344,7 +344,7 @@ async def ask_cherry(interaction: discord.Interaction, question: str):
         return
     body = answer or "Got nothing back. Try again."
     try:
-        audio, engine = await vc.speak(body, voice_id=vc.CHERRY_VOICE_ID)
+        audio, engine = await vc.speak(body, voice_id=vc.CHERRY_VOICE_ID, max_words=85)
     except Exception as e:
         await interaction.followup.send(
             f"Voice shit the bed: `{type(e).__name__}: {e}`\n\n**Q:** {question}\n{body}"[:2000]
@@ -426,11 +426,16 @@ invent stats, never do arithmetic, and never comment on passing, positioning,
 hockey IQ, chemistry or attitude -- you have no data for those. Frame him
 against the position he actually plays most."""
 
+# Fourth element is the enforced word ceiling passed to vc.speak(). Cherry
+# talks slower than the others -- the interruptions, "er"s and restarts eat
+# real seconds a word count doesn't show -- so the same MAX_SPOKEN_WORDS that
+# gives buddy/trump a 20-30s clip ran Cherry to ~50s. The prompt now targets
+# 60-75 words on its own, this is the hard backstop if it ignores that.
 VOICES = {
-    "buddy": (lambda: vc.VOICE_PROMPT, lambda: vc.VOICE_ID, False),
-    "trump": (lambda: vc.TRUMP_SCOUT_PROMPT, lambda: vc.TRUMP_VOICE_ID, False),
-    "torts": (lambda: vc.TORTS_SCOUT_PROMPT, lambda: vc.TORTS_VOICE_ID, True),
-    "cherry": (lambda: vc.CHERRY_SCOUT_PROMPT, lambda: vc.CHERRY_VOICE_ID, False),
+    "buddy": (lambda: vc.VOICE_PROMPT, lambda: vc.VOICE_ID, False, vc.MAX_SPOKEN_WORDS),
+    "trump": (lambda: vc.TRUMP_SCOUT_PROMPT, lambda: vc.TRUMP_VOICE_ID, False, vc.MAX_SPOKEN_WORDS),
+    "torts": (lambda: vc.TORTS_SCOUT_PROMPT, lambda: vc.TORTS_VOICE_ID, True, vc.MAX_SPOKEN_WORDS),
+    "cherry": (lambda: vc.CHERRY_SCOUT_PROMPT, lambda: vc.CHERRY_VOICE_ID, False, 85),
 }
 
 
@@ -491,7 +496,7 @@ async def pubscout(interaction: discord.Interaction, gamertag: str,
                           filename=f"{CLIP_BRAND}-pubscout-{m.get('name')}.png")]
 
     if voice:
-        prompt_fn, vid_fn, ramped = VOICES[voice.value]
+        prompt_fn, vid_fn, ramped, max_words = VOICES[voice.value]
         try:
             resp = await call_llm(
                 messages=[{"role": "system", "content": prompt_fn()},
@@ -504,7 +509,7 @@ async def pubscout(interaction: discord.Interaction, gamertag: str,
                     end_gain=vc.TORTS_GAIN_END, steps=vc.TORTS_RAMP_STEPS,
                     temp_start=vc.TORTS_TTS_TEMP_START, temp_end=vc.TORTS_TTS_TEMP_END)
             else:
-                audio, _ = await vc.speak(script, voice_id=vid_fn())
+                audio, _ = await vc.speak(script, voice_id=vid_fn(), max_words=max_words)
             files.append(discord.File(io.BytesIO(audio),
                                       filename=f"{CLIP_BRAND}-pubscout-{voice.value}.mp3"))
         except Exception as e:

@@ -194,7 +194,11 @@ Speech patterns to actually use, not just once but woven through naturally:
 Same political lean and bluntness as everything else here -- no hedging, no
 safe consensus answer, give the real take.
 
-Target 90-110 words. Hard cap 120."""
+LENGTH IS A HARD REQUIREMENT, NOT A SUGGESTION. This voice talks slower than
+the others -- the interruptions, the "er"s, the restarts all eat real seconds
+that don't show up in a word count -- so the word target is lower than you'd
+expect for a 20-30 second clip. TARGET 60-75 WORDS. HARD CAP 85. Count as you
+write. Land the point and stop; don't keep circling back for one more "eh." """
 
 TORTS_VOICE_PROMPT = """You are doing a John Tortorella impression at a
 press conference. Read by a Torts-sounding TTS voice.
@@ -565,7 +569,11 @@ leading with the verdict rather than the number. Never say a decimal out loud
 "5.9 hits a game"). Round only numbers you were actually given; never do
 arithmetic to invent a new stat.
 
-Target 90-110 words. Hard cap 120."""
+LENGTH IS A HARD REQUIREMENT, NOT A SUGGESTION. This voice talks slower than
+the others -- the interruptions, the "er"s, the restarts eat real seconds that
+don't show up in a word count -- so the target is lower than you'd expect for
+a 20-30 second clip. TARGET 60-75 WORDS. HARD CAP 85. Count as you write. Land
+the verdict and stop; don't keep circling back for one more "eh." """
 
 # For /scout-trump -- the EA scouting report, same Trump impression, but the
 # CONTENT rules are identical to VOICE_PROMPT below: real stats only, no
@@ -1192,8 +1200,9 @@ async def speak_ramped(
             print(f"[voice] ramped Fish call failed, falling back: {type(e).__name__}: {e}")
     return await speak(text, voice_id, start_speed)
 
-async def speak(text: str, voice_id: str = VOICE_ID, speed: float = 1.0) -> tuple[bytes, str]:
-    text = _cap_length(_clean_for_speech(text))
+async def speak(text: str, voice_id: str = VOICE_ID, speed: float = 1.0,
+                max_words: int = MAX_SPOKEN_WORDS) -> tuple[bytes, str]:
+    text = _cap_length(_clean_for_speech(text), max_words)
     if os.getenv("FISH_API_KEY"):
         try:
             return await asyncio.to_thread(_tts_sync, text, voice_id, speed), "Fish Audio"
