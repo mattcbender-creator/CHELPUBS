@@ -3,6 +3,9 @@
 .env*
 !.env.example
 
+# raw sampler pull -- large, and pool.json is the derived artifact
+players_raw.json
+
 # test card renders
 card_*.png
 
