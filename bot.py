@@ -387,19 +387,31 @@ Profanity is fine. Blunt, funny when it's earned, no corporate hedging."""
 
 # The card shows every number already, so the read exists to say what they
 # MEAN. Short, because it sits in a fixed-height block on the card.
-CARD_READ_PROMPT = """You write the one-paragraph read at the bottom of a
-scouting card. The card already shows his stats, his position split and his
-percentile bars -- do NOT list numbers back, that space is spent. Your job is
-the verdict: what kind of player this is and whether you'd want him.
+CARD_READ_PROMPT = """You write the headline read at the TOP of a scouting
+card -- the first thing anyone sees, and often the only thing they read. Say
+what kind of player this is and whether you would want him.
 
-45-60 words, 2-3 sentences, no markdown, no headers, no bullet points. Plain
+The card shows his stats, his position split and his percentile bars right
+underneath you, so do NOT read numbers back. Spend your words on what the
+numbers MEAN.
+
+40-55 words, 2-3 sentences, no markdown, no headers, no bullet points. Plain
 declarative writing -- blunt and readable, not a chirp and not a bit.
 
-Every number you mention must appear verbatim in the data, and mention at most
-ONE. Never invent stats, never do arithmetic, and never comment on passing,
-positioning, hockey IQ, chemistry or attitude -- you have no data for those.
-Use the EXACT grade word you're given. Frame him against the position he
-actually plays most. Don't sugarcoat bad numbers or inflate good ones."""
+YOU MUST NOT CONTRADICT THE PERCENTILES. They are what the reader sees an inch
+below your sentence, so calling a 53rd-percentile guy "a heavy physical
+presence" makes the whole card look broken. The card prints a word next to each bar, so use THAT vocabulary and no other:
+  90+  elite      78-89  stud       62-77  solid
+  45-61 mid       30-44  weak       15-29  bender
+  under 15  shitter
+"Mid" means ordinary, not good. A bender or a shitter is a genuine weakness and
+you should say so plainly rather than dressing it up.
+A percentile is a rank against players at his own position, not a rate.
+
+Mention at most ONE number, and only if it appears verbatim in the data. Never
+invent stats, never do arithmetic, and never comment on passing, positioning,
+hockey IQ, chemistry or attitude -- you have no data for those. Frame him
+against the position he actually plays most."""
 
 async def _run_scout(interaction: discord.Interaction, gamertag: str, voice: bool,
                       voice_prompt: str = None, voice_id: str = None, clip_name: str = "scout-buddy",
@@ -490,8 +502,22 @@ async def mc(interaction: discord.Interaction, gamertag: str):
     read = None
     try:
         standout = ea.standout_trait(m)
-        block = ea.format_stats(m) + "\n\nVERDICTS (computed, not your opinion):\n" + "\n".join(
-            ea.grade_positions(m))
+        # The read is fed the SAME percentiles the bars are drawn from. Feeding
+        # it the band words instead let the prose call a 53rd-percentile player
+        # "heavy" while the bar underneath said average -- the card contradicted
+        # itself in the reader's eye.
+        primary = (card._positions(m) or [("?", 0)])[0][0]
+        rates = card._rates(m)
+        pcts = []
+        for key in card.ROWS_BY_POS.get(primary, []):
+            if key in rates:
+                pc = card.percentile(primary, key, rates[key])
+                if pc is not None:
+                    pcts.append(f"  {card.LABELS[key]}: {pc}th percentile "
+                                f"among {primary} (his rate {rates[key]:.2f})")
+        block = ea.format_stats(m)
+        block += (f"\n\nPERCENTILE RANKS vs other {primary} with 50+ games -- these are "
+                  f"what the card shows, do not contradict them:\n" + "\n".join(pcts))
         if standout:
             block += (f"\n\nSTANDOUT TRAIT to focus on: {standout['trait']} -- "
                       f"{standout['grade']} ({standout['detail']})")

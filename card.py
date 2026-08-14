@@ -57,11 +57,16 @@ _pool = None
 # Which rows to show, in order of what actually matters at that position.
 # Centres and wingers are judged on offence first; defencemen on the results
 # and the physical game; goalies on an entirely different set.
+# Four rows, not five, and only the ones a decision actually turns on.
+# Forwards are judged on whether they produce and whether the puck ends up in
+# the right net; physicality is not why anyone picks a winger, so it is off the
+# forward card. A defenceman is the opposite case -- how he defends and moves
+# the puck is the whole question, and his raw scoring matters least.
 ROWS_BY_POS = {
-    "C":  ["scoring", "playmaking", "impact", "physicality", "discipline"],
-    "LW": ["scoring", "playmaking", "impact", "physicality", "discipline"],
-    "RW": ["scoring", "playmaking", "impact", "physicality", "discipline"],
-    "D":  ["impact", "physicality", "playmaking", "scoring", "discipline"],
+    "C":  ["scoring", "playmaking", "impact", "discipline"],
+    "LW": ["scoring", "playmaking", "impact", "discipline"],
+    "RW": ["scoring", "playmaking", "impact", "discipline"],
+    "D":  ["impact", "physicality", "playmaking", "discipline"],
     "G":  ["savepct", "gaa", "workload", "shutouts"],
 }
 
@@ -135,6 +140,27 @@ def percentile(pos: str, metric: str, value: float) -> int | None:
     return 100 - p if metric in ("discipline", "gaa") else p
 
 
+# The tier ladder, in the vernacular the audience actually uses. A rank like
+# "62nd" takes a beat to interpret; "SOLID" does not, and the ordinal is still
+# printed beside it for anyone who wants the precision.
+TIERS = [
+    (90, "ELITE"),
+    (78, "STUD"),
+    (62, "SOLID"),
+    (45, "MID"),
+    (30, "WEAK"),
+    (15, "BENDER"),
+    (0,  "SHITTER"),
+]
+
+
+def tier(p: int) -> str:
+    for floor, word in TIERS:
+        if p >= floor:
+            return word
+    return TIERS[-1][1]
+
+
 def _pole(p: int) -> tuple:
     if p >= 50 + MID_TOL:
         return BLUE
@@ -185,10 +211,10 @@ def _verdict(primary: str, rows: list, is_goalie: bool) -> str:
     best = max(ranked, key=lambda t: t[1])
     worst = min(ranked, key=lambda t: t[1])
     if best[1] < 40:
-        return f"BELOW AVERAGE {primary} ACROSS THE BOARD"
+        return f"{tier(best[1])} {primary} ACROSS THE BOARD"
     if worst[1] >= 60:
-        return f"STRONG {primary} EVERYWHERE"
-    return f"{best[0]} {primary}  ·  WEAK {worst[0]}"
+        return f"{tier(worst[1])} {primary} EVERYWHERE"
+    return f"{tier(best[1])} {best[0]}  ·  {tier(worst[1])} {worst[0]}"
 
 
 def render(m: dict, read: str | None = None) -> bytes:
@@ -217,13 +243,18 @@ def render(m: dict, read: str | None = None) -> bytes:
     f_bar = _font("bold", 20)
     f_val = _font("bold", 19)
     f_note = _font("medium", 16)
-    f_read = _font("regular", 22)
+    f_read = _font("medium", 27)
     f_foot = _font("bold", 17)
 
     metrics = ROWS_BY_POS.get(primary, ROWS_BY_POS["C"])
     rows = []
     for key in metrics:
         if key not in rates:
+            continue
+        # A goalie with games but no recorded saves is missing data, not a
+        # player who faced nothing -- ranking that as 0th would be a lie, and
+        # the read would then describe him as never seeing the puck.
+        if key == "workload" and not rates[key]:
             continue
         rows.append((LABELS[key], key, rates[key], percentile(primary, key, rates[key])))
 
@@ -232,7 +263,7 @@ def render(m: dict, read: str | None = None) -> bytes:
     read_lines: list[str] = []
     if read:
         tmp = ImageDraw.Draw(Image.new("RGB", (10, 10)))
-        maxw = W - 2 * PAD - 36
+        maxw = W - 2 * PAD - 8
         line = ""
         for wd in read.split():
             trial = f"{line} {wd}".strip()
@@ -243,16 +274,17 @@ def render(m: dict, read: str | None = None) -> bytes:
                 line = wd
         if line:
             read_lines.append(line)
-        read_lines = read_lines[:5]
+        read_lines = read_lines[:4]
 
     H = (150            # brand
          + 78           # name
-         + 46           # verdict
-         + 74           # position strip
+         + (len(read_lines) * 36 + 22 if read_lines else 44)   # the read, or the computed verdict
+         + 62           # position strip
          + 132          # stat tiles
+         + (92 if not is_goalie and points else 0)   # play-style axis
+         + (60 if ((not is_goalie and glgp >= 10) or (is_goalie and skater_gp >= 10)) else 0)
          + 62           # bars header + legend
          + len(rows) * 52
-         + (len(read_lines) * 32 + 40 if read_lines else 0)
          + 74)
     img = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(img)
@@ -272,12 +304,20 @@ def render(m: dict, read: str | None = None) -> bytes:
     _text(d, (PAD, y), name[:17], f_name, TEXT)
     _text(d, (W - PAD, y + 30), f"{gp:.0f} GAMES", f_sub, MUTED, anchor="ra")
 
-    # ---- verdict: the headline read, before any number
-    y += 80
-    _text(d, (PAD, y), verdict[:46], f_verdict, BLUE)
+    # ---- the read leads the card. It is the fastest path to "what is this
+    # guy", so it goes above every number rather than under them. The computed
+    # verdict is the fallback for when the model call failed.
+    y += 78
+    if read_lines:
+        for ln in read_lines:
+            _text(d, (PAD, y), ln, f_read, TEXT)
+            y += 36
+        y += 22
+    else:
+        _text(d, (PAD, y), verdict[:46], f_verdict, BLUE)
+        y += 44
 
     # ---- position strip: share of games, primary called out explicitly
-    y += 50
     _text(d, (PAD, y), "POSITIONS", f_statlbl, DIM)
     y += 26
     total = sum(n for _, n in posns) or 1
@@ -297,11 +337,9 @@ def render(m: dict, read: str | None = None) -> bytes:
             _text(d, (x + 12 + d.textlength(pos, font=f_pos) + 8, y + 9),
                   f"{n}", f_posn, TEXT if i == 0 else DIM)
         x += seg
-    y += 42
-    _text(d, (PAD, y), f"MAIN POSITION: {primary}", f_note, MUTED)
+    y += 40
 
     # ---- headline tiles
-    y += 34
     tiles = ([("SV%", _fmt("savepct", rates.get("savepct", 0))),
               ("GAA", _fmt("gaa", rates.get("gaa", 0))),
               ("GP", f"{glgp:.0f}"), ("SO", f"{ea._num(m.get('glso')):.0f}")]
@@ -319,6 +357,42 @@ def render(m: dict, read: str | None = None) -> bytes:
         _text(d, (cx, y + 84), lbl, f_statlbl, MUTED, anchor="mm")
     y += 146
 
+    # ---- shooter <-> playmaker axis
+    # For a forward this is the single thing people ask after "is he good" --
+    # does he finish or does he set up. It is a balance, not a ranking, so it
+    # gets a marker on an axis rather than a bar with a good end and a bad end.
+    if not is_goalie and points:
+        goal_share = goals / points
+        _text(d, (PAD, y), "PLAY STYLE", f_statlbl, DIM)
+        y += 28
+        ax0, ax1 = PAD + 132, W - PAD - 132
+        d.rounded_rectangle([ax0, y + 8, ax1, y + 14], radius=3, fill=(34, 38, 48))
+        mx = ax0 + (ax1 - ax0) * (1 - goal_share)
+        d.ellipse([mx - 9, y + 2, mx + 9, y + 20], fill=BLUE)
+        _text(d, (PAD, y + 1), "SHOOTER", f_bar, TEXT if goal_share >= 0.5 else MUTED)
+        _text(d, (W - PAD, y + 1), "PLAYMAKER", f_bar,
+              TEXT if goal_share < 0.5 else MUTED, anchor="ra")
+        y += 30
+        _text(d, ((ax0 + ax1) / 2, y), f"{goal_share * 100:.0f}% of his points are goals",
+              f_note, DIM, anchor="ma")
+        y += 34
+
+    # ---- a skater who also plays net, or a goalie who also skates.
+    # Plenty of pubs players do both, and a card that hides half of it is
+    # telling you the wrong thing about who you just looked up.
+    other = None
+    if not is_goalie and glgp >= 10:
+        other = (f"ALSO PLAYS NET: {glgp:.0f} GP  ·  "
+                 f"{_fmt('savepct', rates.get('savepct', 0))} SV%  ·  "
+                 f"{_fmt('gaa', rates.get('gaa', 0))} GAA")
+    elif is_goalie and skater_gp >= 10:
+        other = (f"ALSO SKATES: {skater_gp:.0f} GP  ·  "
+                 f"{points:.0f} P  ·  {points / skater_gp:.2f} P/GP")
+    if other:
+        d.rounded_rectangle([PAD, y, W - PAD, y + 44], radius=10, fill=PANEL)
+        _text(d, (PAD + 18, y + 13), other, f_note, MUTED)
+        y += 60
+
     # ---- diverging percentile bars
     ref = _breakpoints(primary, rows[0][1])[1] if rows else primary
     n_pool = max(pool().get("counts", {}).get(ref, {}).values() or [0])
@@ -328,7 +402,7 @@ def render(m: dict, read: str | None = None) -> bytes:
     _text(d, (PAD, y), "centre line = average player · right is better", f_note, DIM)
     y += 30
 
-    x0, x1 = PAD + 210, W - PAD - 118
+    x0, x1 = PAD + 210, W - PAD - 164
     mid = (x0 + x1) / 2
     bars_top = y + 10
     for lbl, metric, value, p in rows:
@@ -344,7 +418,8 @@ def render(m: dict, read: str | None = None) -> bytes:
                 d.rounded_rectangle([mid, y + 12, mid + off, y + 30], radius=4, fill=col)
             else:
                 d.rounded_rectangle([mid + off, y + 12, mid, y + 30], radius=4, fill=col)
-            _text(d, (W - PAD, y + 8), _ordinal(p), f_val, TEXT, anchor="ra")
+            _text(d, (W - PAD, y + 1), tier(p), f_val, TEXT, anchor="ra")
+            _text(d, (W - PAD, y + 24), _ordinal(p), f_note, DIM, anchor="ra")
         else:
             _text(d, (W - PAD, y + 8), "n/a", f_val, DIM, anchor="ra")
         # raw rate, so the card shows the actual number and not only a rank
@@ -353,15 +428,6 @@ def render(m: dict, read: str | None = None) -> bytes:
     # One reference line spanning every row, drawn last so it reads as a scale
     # rather than as part of any single bar.
     d.line([mid, bars_top, mid, y - 16], fill=(150, 156, 172), width=2)
-
-    # ---- the read
-    if read_lines:
-        y += 14
-        top = y
-        for ln in read_lines:
-            _text(d, (PAD + 20, y), ln, f_read, (208, 212, 222))
-            y += 32
-        d.rectangle([PAD, top - 2, PAD + 3, y - 8], fill=BLUE)
 
     # ---- footer
     y = H - 56
