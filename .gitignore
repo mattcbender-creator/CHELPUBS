@@ -3,6 +3,9 @@
 .env*
 !.env.example
 
+# test card renders
+card_*.png
+
 # local backups -- git history replaces these
 backups/
 

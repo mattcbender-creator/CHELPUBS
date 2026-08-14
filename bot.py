@@ -9,6 +9,7 @@ import discord
 from discord import app_commands
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
+import card
 import ea
 import voice as vc
 
@@ -384,6 +385,22 @@ scouts all read the same. 2-3 numbers total, not a stat dump.
 
 Profanity is fine. Blunt, funny when it's earned, no corporate hedging."""
 
+# The card shows every number already, so the read exists to say what they
+# MEAN. Short, because it sits in a fixed-height block on the card.
+CARD_READ_PROMPT = """You write the one-paragraph read at the bottom of a
+scouting card. The card already shows his stats, his position split and his
+percentile bars -- do NOT list numbers back, that space is spent. Your job is
+the verdict: what kind of player this is and whether you'd want him.
+
+45-60 words, 2-3 sentences, no markdown, no headers, no bullet points. Plain
+declarative writing -- blunt and readable, not a chirp and not a bit.
+
+Every number you mention must appear verbatim in the data, and mention at most
+ONE. Never invent stats, never do arithmetic, and never comment on passing,
+positioning, hockey IQ, chemistry or attitude -- you have no data for those.
+Use the EXACT grade word you're given. Frame him against the position he
+actually plays most. Don't sugarcoat bad numbers or inflate good ones."""
+
 async def _run_scout(interaction: discord.Interaction, gamertag: str, voice: bool,
                       voice_prompt: str = None, voice_id: str = None, clip_name: str = "scout-buddy",
                       ramped: bool = False):
@@ -457,6 +474,43 @@ async def scout_trump(interaction: discord.Interaction, gamertag: str):
         interaction, gamertag, voice=True,
         voice_prompt=vc.TRUMP_SCOUT_PROMPT, voice_id=vc.TRUMP_VOICE_ID, clip_name="scout-trump",
     )
+
+@tree.command(name="minicard", description="Branded ChelScout card for an EA NHL player")
+@app_commands.describe(gamertag="EA gamertag to look up")
+@app_commands.autocomplete(gamertag=gamertag_autocomplete)
+async def minicard(interaction: discord.Interaction, gamertag: str):
+    await interaction.response.defer()
+    m = await ea.search_player(gamertag)
+    if not m:
+        await interaction.followup.send(f"No player found for `{gamertag}`.")
+        return
+
+    # The written read is the only cost here; the card itself is pure CPU. If
+    # the model fails, the card still renders -- it just goes out without prose.
+    read = None
+    try:
+        standout = ea.standout_trait(m)
+        block = ea.format_stats(m) + "\n\nVERDICTS (computed, not your opinion):\n" + "\n".join(
+            ea.grade_positions(m))
+        if standout:
+            block += (f"\n\nSTANDOUT TRAIT to focus on: {standout['trait']} -- "
+                      f"{standout['grade']} ({standout['detail']})")
+        resp = await call_llm(
+            messages=[{"role": "system", "content": CARD_READ_PROMPT},
+                      {"role": "user", "content": block}],
+            max_tokens=160, temperature=0.6,
+        )
+        read = ea.enforce_grade_word((resp.choices[0].message.content or "").strip(), standout)
+    except Exception as e:
+        print(f"[minicard] read failed, rendering without it: {type(e).__name__}: {e}")
+
+    try:
+        png = await asyncio.to_thread(card.render, m, read)
+    except Exception as e:
+        await interaction.followup.send(f"Card render shit the bed: `{type(e).__name__}: {e}`")
+        return
+    f = discord.File(io.BytesIO(png), filename=f"{CLIP_BRAND}-minicard-{m.get('name')}.png")
+    await interaction.followup.send(file=f)
 
 @tree.command(name="scout-torts", description="Same scout, delivered like a Torts presser")
 @app_commands.describe(gamertag="EA gamertag to look up")
