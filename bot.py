@@ -322,6 +322,37 @@ async def ask_trump(interaction: discord.Interaction, question: str):
     clip = clip_file(audio, "ask-trump")
     await interaction.followup.send(f"**Q:** {question}"[:2000], file=clip)
 
+@tree.command(name="ask-cherry", description="Ask anything, answered in a Don Cherry impression")
+@app_commands.describe(question="What do you want to know?")
+async def ask_cherry(interaction: discord.Interaction, question: str):
+    await interaction.response.defer()
+    question, people = await resolve_mentions(interaction, question)
+    note = await player_note(people)
+    try:
+        resp = await call_llm(
+            messages=[
+                {"role": "system", "content": vc.CHERRY_VOICE_PROMPT},
+                *([{"role": "system", "content": note}] if note else []),
+                {"role": "user", "content": question},
+            ],
+            max_tokens=220,
+            temperature=0.8,
+        )
+        answer = vc.strip_language_reactions((resp.choices[0].message.content or "").strip())
+    except Exception as e:
+        await interaction.followup.send(f"OpenRouter shit the bed: `{type(e).__name__}: {e}`")
+        return
+    body = answer or "Got nothing back. Try again."
+    try:
+        audio, engine = await vc.speak(body, voice_id=vc.CHERRY_VOICE_ID)
+    except Exception as e:
+        await interaction.followup.send(
+            f"Voice shit the bed: `{type(e).__name__}: {e}`\n\n**Q:** {question}\n{body}"[:2000]
+        )
+        return
+    clip = clip_file(audio, "ask-cherry")
+    await interaction.followup.send(f"**Q:** {question}"[:2000], file=clip)
+
 @tree.command(name="ask-torts", description="Ask Torts anything, answered like a presser")
 @app_commands.describe(question="What do you want to know?")
 async def ask_torts(interaction: discord.Interaction, question: str):
@@ -399,6 +430,7 @@ VOICES = {
     "buddy": (lambda: vc.VOICE_PROMPT, lambda: vc.VOICE_ID, False),
     "trump": (lambda: vc.TRUMP_SCOUT_PROMPT, lambda: vc.TRUMP_VOICE_ID, False),
     "torts": (lambda: vc.TORTS_SCOUT_PROMPT, lambda: vc.TORTS_VOICE_ID, True),
+    "cherry": (lambda: vc.CHERRY_SCOUT_PROMPT, lambda: vc.CHERRY_VOICE_ID, False),
 }
 
 
@@ -410,6 +442,7 @@ VOICES = {
     app_commands.Choice(name="Canadian hockey guy", value="buddy"),
     app_commands.Choice(name="Tortorella", value="torts"),
     app_commands.Choice(name="Trump", value="trump"),
+    app_commands.Choice(name="Don Cherry", value="cherry"),
 ])
 async def pubscout(interaction: discord.Interaction, gamertag: str,
                    voice: app_commands.Choice[str] = None):
