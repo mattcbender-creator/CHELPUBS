@@ -55,13 +55,39 @@ def _font(name: str, size: int):
     return ImageFont.truetype(paths[name], size)
 
 
+# Below this a pool is too small to give an honest percentile -- ranks start
+# moving in visible jumps rather than smoothly.
+MIN_POOL_N = 150
+FORWARDS = ("C", "LW", "RW")
+
+
+def _breakpoints(pos: str, metric: str):
+    """Breakpoints for this position, falling back to all forwards if thin.
+
+    Right wing is a rare primary position, so its own pool stays small however
+    hard the sampler runs. Ranking a right winger against every forward is
+    coarser than against right wings, but far better than a scale built from
+    a few dozen players.
+    """
+    p = pool()
+    bp = p.get("breakpoints", {}).get(pos, {}).get(metric)
+    n = p.get("counts", {}).get(pos, {}).get(metric, 0)
+    if bp and n >= MIN_POOL_N:
+        return bp, pos
+    if pos in FORWARDS:
+        alt = p.get("breakpoints", {}).get("F", {}).get(metric)
+        if alt and p.get("counts", {}).get("F", {}).get(metric, 0) >= MIN_POOL_N:
+            return alt, "F"
+    return bp, pos  # thin, but the only thing available
+
+
 def percentile(pos: str, metric: str, value: float) -> int | None:
     """Where this rate lands among players who mainly play the same position.
 
     Discipline and GAA are inverted: fewer penalty minutes and a lower goals
     against average are better, so a low raw value has to score high.
     """
-    bp = pool().get("breakpoints", {}).get(pos, {}).get(metric)
+    bp, _ = _breakpoints(pos, metric)
     if not bp:
         return None
     p = bisect.bisect_left(bp, value)
@@ -227,9 +253,12 @@ def render(m: dict, read: str | None = None) -> bytes:
     y += 158
 
     # ---- percentile bars
-    pos_n = pool().get("counts", {}).get(primary, {})
-    n = max(pos_n.values()) if pos_n else 0
-    header = f"VS {primary} POOL" + (f" · {n} PLAYERS" if n else "")
+    # Name the pool actually used, which may be the forwards fallback -- the
+    # card should never claim a comparison it didn't make.
+    ref = _breakpoints(primary, rows[0][1])[1] if rows else primary
+    n = max(pool().get("counts", {}).get(ref, {}).values() or [0])
+    header = (f"VS {'FORWARD' if ref == 'F' else ref} POOL"
+              + (f" · {n} PLAYERS" if n else ""))
     _text(d, (PAD, y), header, f_statlbl, DIM)
     y += 34
     for lbl, metric, value in rows:
