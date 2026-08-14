@@ -44,7 +44,12 @@ LINE = (40, 44, 54)
 TEXT = (240, 242, 246)
 MUTED = (138, 143, 158)
 DIM = (92, 97, 112)
-BLUE = (59, 142, 245)      # brand accent only, never a rating
+# Official ChelScout blue, sampled from the logo. #0069FA clears the mark
+# threshold on this surface (L .565, C .231, 3.99:1) so it is used for fills;
+# small text takes the lighter step, which clears the 4.5:1 text bar at 5.30:1.
+BLUE = (0, 105, 250)       # brand fill -- accent only, never a rating
+BLUE_TEXT = (43, 132, 255)  # brand blue for type
+NAVY = (16, 37, 64)        # logo navy
 # Rating scale. Red/green is the classic colour-blind failure, so the green is
 # pushed toward teal: that is what carries the pair past the CVD threshold.
 # Validated on the dark surface, all pairs above the dE 8 target:
@@ -355,7 +360,7 @@ def render(m: dict, read: str | None = None) -> bytes:
     y = 44
     _text(d, (PAD, y), "Chel", f_brand, TEXT)
     bw = d.textlength("Chel", font=f_brand)
-    _text(d, (PAD + bw, y), "Scout", f_brand, BLUE)
+    _text(d, (PAD + bw, y), "Scout", f_brand, BLUE_TEXT)
     bw += d.textlength("Scout", font=f_brand)
     _text(d, (PAD + bw + 4, y + 14), ".net", f_brandsub, MUTED)
     _text(d, (W - PAD, y + 9), "PUBS SCOUTING REPORT", f_kicker, DIM, anchor="ra")
@@ -467,7 +472,7 @@ def render(m: dict, read: str | None = None) -> bytes:
     # ---- footer
     y = H - 56
     d.line([PAD, y - 20, W - PAD, y - 20], fill=LINE)
-    _text(d, (PAD, y), "chelscout.net", f_foot, BLUE)
+    _text(d, (PAD, y), "chelscout.net", f_foot, BLUE_TEXT)
     _text(d, (W - PAD, y), "SCOUT SMARTER. CHIRP RESPONSIBLY.", f_foot, DIM, anchor="ra")
 
     buf = io.BytesIO()
