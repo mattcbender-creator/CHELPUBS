@@ -13,6 +13,7 @@ with real minutes makes the scale mean "good among people who actually play",
 which is a harder and more honest bar.
 """
 import json
+import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -191,12 +192,21 @@ def metrics(players: list[dict]) -> dict[str, dict[str, list[float]]]:
 
         if skater_gp < MIN_POOL_GP:
             continue
-        b = bucket(pos)
         pts = ea._num(m.get("skgoals")) + ea._num(m.get("skassists"))
-        b["production"].append(pts / skater_gp)
-        b["physicality"].append(ea._num(m.get("skhits")) / skater_gp)
-        b["discipline"].append(ea._num(m.get("skpim")) / skater_gp)
-        b["impact"].append(ea._num(m.get("skplusmin")) / skater_gp)
+        vals = {
+            "production": pts / skater_gp,
+            "physicality": ea._num(m.get("skhits")) / skater_gp,
+            "discipline": ea._num(m.get("skpim")) / skater_gp,
+            "impact": ea._num(m.get("skplusmin")) / skater_gp,
+        }
+        # Every forward also joins a combined "F" pool. Right wing is a rare
+        # primary position, so its own pool stays small no matter how hard we
+        # sample -- ranking a RW against all forwards is coarser than ranking
+        # him against right wings, but far better than a 46-player scale.
+        targets = [bucket(pos)] + ([bucket("F")] if pos in ("C", "LW", "RW") else [])
+        for b in targets:
+            for k, v in vals.items():
+                b[k].append(v)
     return cols
 
 
@@ -212,10 +222,23 @@ def breakpoints(values: list[float]) -> list[float]:
     return out
 
 
+RAW = "players_raw.json"
+
+
 def main():
-    print(f"sampling {len(STEMS)} stems...", flush=True)
-    players = collect()
-    print(f"collected {len(players)} unique players", flush=True)
+    # Sampling is the expensive, rate-limited part, so the raw pull is cached.
+    # Re-deriving pools from it (new buckets, new floors) then costs nothing.
+    # Pass --refresh to force a new sample.
+    if "--refresh" not in sys.argv and os.path.exists(RAW):
+        with open(RAW) as f:
+            players = json.load(f)
+        print(f"reusing {RAW}: {len(players)} players (--refresh to re-sample)", flush=True)
+    else:
+        print(f"sampling {len(STEMS)} stems...", flush=True)
+        players = collect()
+        with open(RAW, "w") as f:
+            json.dump(players, f)
+        print(f"collected {len(players)} unique players -> {RAW}", flush=True)
 
     cols = metrics(players)
     pool = {

@@ -475,10 +475,10 @@ async def scout_trump(interaction: discord.Interaction, gamertag: str):
         voice_prompt=vc.TRUMP_SCOUT_PROMPT, voice_id=vc.TRUMP_VOICE_ID, clip_name="scout-trump",
     )
 
-@tree.command(name="minicard", description="Branded ChelScout card for an EA NHL player")
+@tree.command(name="mc", description="Branded ChelScout card for an EA NHL player")
 @app_commands.describe(gamertag="EA gamertag to look up")
 @app_commands.autocomplete(gamertag=gamertag_autocomplete)
-async def minicard(interaction: discord.Interaction, gamertag: str):
+async def mc(interaction: discord.Interaction, gamertag: str):
     await interaction.response.defer()
     m = await ea.search_player(gamertag)
     if not m:
