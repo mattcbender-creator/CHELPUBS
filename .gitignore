@@ -1,0 +1,15 @@
+# secrets -- .env* catches the real .env and any mistyped variants
+# (a stray ".env<apikey>" file once landed here from a bad shell redirect)
+.env*
+!.env.example
+
+# local backups -- git history replaces these
+backups/
+
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+.DS_Store
+.claude/settings.local.json
