@@ -117,6 +117,31 @@ def pool() -> dict:
     return _pool
 
 
+_logo = None
+
+
+def logo(height: int):
+    """The official dark-background lockup, scaled to a given cap height.
+
+    Drawn as the real asset rather than typed out in Roboto -- the wordmark has
+    its own letterforms and the mark cannot be reproduced with text at all.
+    Falls back to None so a missing asset degrades to the typed wordmark
+    instead of failing the whole render.
+    """
+    global _logo
+    if _logo is None:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "assets", "chelscout-dark.png")
+        try:
+            _logo = Image.open(path).convert("RGBA")
+        except Exception:
+            _logo = False
+    if not _logo:
+        return None
+    w = round(_logo.width * height / _logo.height)
+    return _logo.resize((w, height), Image.LANCZOS)
+
+
 def _font(name: str, size: int):
     # The wheel exposes each weight as a path constant; plain regular is
     # "Roboto", not "RobotoRegular".
@@ -358,11 +383,15 @@ def render(m: dict, read: str | None = None) -> bytes:
 
     # ---- brand
     y = 44
-    _text(d, (PAD, y), "Chel", f_brand, TEXT)
-    bw = d.textlength("Chel", font=f_brand)
-    _text(d, (PAD + bw, y), "Scout", f_brand, BLUE_TEXT)
-    bw += d.textlength("Scout", font=f_brand)
-    _text(d, (PAD + bw + 4, y + 14), ".net", f_brandsub, MUTED)
+    mark = logo(54)
+    if mark:
+        img.paste(mark, (PAD, y - 12), mark)
+    else:
+        _text(d, (PAD, y), "Chel", f_brand, TEXT)
+        bw = d.textlength("Chel", font=f_brand)
+        _text(d, (PAD + bw, y), "Scout", f_brand, BLUE_TEXT)
+        bw += d.textlength("Scout", font=f_brand)
+        _text(d, (PAD + bw + 4, y + 14), ".net", f_brandsub, MUTED)
     _text(d, (W - PAD, y + 9), "PUBS SCOUTING REPORT", f_kicker, DIM, anchor="ra")
 
     # ---- name
