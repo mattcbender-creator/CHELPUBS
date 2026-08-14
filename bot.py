@@ -144,15 +144,24 @@ async def player_note(people: list | None = None) -> str | None:
     return None
 
 async def gamertag_autocomplete(interaction: discord.Interaction, current: str):
-    if not current or len(current) < 2:
+    """Ranked gamertag suggestions, refreshed on every keystroke.
+
+    EA's search needs 4 characters, so nothing can be offered below that. From
+    there ea.suggest() queries only the 4-character stem and re-ranks locally,
+    which means the first keystroke past the threshold pays for the network
+    call and everything after it comes back instantly from cache.
+    """
+    if not current or len(current.strip()) < ea.MIN_QUERY:
         return []
     try:
-        results = await asyncio.wait_for(ea.suggest(current, limit=20, fast=True), timeout=2.0)
+        # Discord drops an autocomplete response after 3s, so bail at 2.5 and
+        # show nothing rather than have the picker hang.
+        results = await asyncio.wait_for(ea.suggest(current, limit=25, fast=True), timeout=2.5)
     except (asyncio.TimeoutError, Exception):
         return []
     return [
         app_commands.Choice(name=ea.label(m)[:100], value=m.get("name", "")[:100])
-        for m in results[:20]
+        for m in results[:25]
     ]
 
 SYSTEM_PROMPT = """You are a Discord bot for the EA NHL / Chel community.
@@ -376,7 +385,8 @@ scouts all read the same. 2-3 numbers total, not a stat dump.
 Profanity is fine. Blunt, funny when it's earned, no corporate hedging."""
 
 async def _run_scout(interaction: discord.Interaction, gamertag: str, voice: bool,
-                      voice_prompt: str = None, voice_id: str = None, clip_name: str = "pubscout-buddy"):
+                      voice_prompt: str = None, voice_id: str = None, clip_name: str = "scout-buddy",
+                      ramped: bool = False):
     await interaction.response.defer()
     m = await ea.search_player(gamertag)
     if not m:
@@ -409,7 +419,14 @@ async def _run_scout(interaction: discord.Interaction, gamertag: str, voice: boo
 
     if voice:
         try:
-            audio, engine = await vc.speak(body, voice_id=voice_id or vc.VOICE_ID)
+            if ramped:
+                audio, engine = await vc.speak_ramped(
+                    body, voice_id or vc.TORTS_VOICE_ID, vc.TORTS_SPEED_START, vc.TORTS_SPEED_END,
+                    end_gain=vc.TORTS_GAIN_END, steps=vc.TORTS_RAMP_STEPS,
+                    temp_start=vc.TORTS_TTS_TEMP_START, temp_end=vc.TORTS_TTS_TEMP_END,
+                )
+            else:
+                audio, engine = await vc.speak(body, voice_id=voice_id or vc.VOICE_ID)
         except Exception as e:
             await interaction.followup.send(
                 f"Voice shit the bed: `{type(e).__name__}: {e}`\n\n**{m.get('name')}**{footer}"[:2000]
@@ -420,25 +437,35 @@ async def _run_scout(interaction: discord.Interaction, gamertag: str, voice: boo
         return
     await interaction.followup.send(f"{body}{footer}"[:2000])
 
-@tree.command(name="pubs", description="Scout an EA NHL player by gamertag")
+@tree.command(name="scout", description="Scout an EA NHL player by gamertag")
 @app_commands.describe(gamertag="EA gamertag to look up")
 @app_commands.autocomplete(gamertag=gamertag_autocomplete)
-async def pubs(interaction: discord.Interaction, gamertag: str):
+async def scout(interaction: discord.Interaction, gamertag: str):
     await _run_scout(interaction, gamertag, voice=False)
 
-@tree.command(name="pubsvoice", description="Same as /pubs, but chirped out loud by a Canadian hockey guy")
+@tree.command(name="scout-buddy", description="Same scout, chirped out loud by the Canadian hockey guy")
 @app_commands.describe(gamertag="EA gamertag to look up")
 @app_commands.autocomplete(gamertag=gamertag_autocomplete)
-async def pubsvoice(interaction: discord.Interaction, gamertag: str):
+async def scout_buddy(interaction: discord.Interaction, gamertag: str):
     await _run_scout(interaction, gamertag, voice=True)
 
-@tree.command(name="trumpscout", description="Same scout, but delivered in a Trump impression")
+@tree.command(name="scout-trump", description="Same scout, delivered in a Trump impression")
 @app_commands.describe(gamertag="EA gamertag to look up")
 @app_commands.autocomplete(gamertag=gamertag_autocomplete)
-async def trumpscout(interaction: discord.Interaction, gamertag: str):
+async def scout_trump(interaction: discord.Interaction, gamertag: str):
     await _run_scout(
         interaction, gamertag, voice=True,
-        voice_prompt=vc.TRUMP_SCOUT_PROMPT, voice_id=vc.TRUMP_VOICE_ID, clip_name="pubscout-trump",
+        voice_prompt=vc.TRUMP_SCOUT_PROMPT, voice_id=vc.TRUMP_VOICE_ID, clip_name="scout-trump",
+    )
+
+@tree.command(name="scout-torts", description="Same scout, delivered like a Torts presser")
+@app_commands.describe(gamertag="EA gamertag to look up")
+@app_commands.autocomplete(gamertag=gamertag_autocomplete)
+async def scout_torts(interaction: discord.Interaction, gamertag: str):
+    await _run_scout(
+        interaction, gamertag, voice=True,
+        voice_prompt=vc.TORTS_SCOUT_PROMPT, voice_id=vc.TORTS_VOICE_ID, clip_name="scout-torts",
+        ramped=True,
     )
 
 @client.event

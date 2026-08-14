@@ -61,22 +61,36 @@ def _all_hits(gamertag: str, fast: bool = False) -> list:
     """
     key = gamertag.strip().lower()
     now = time.time()
-    cached = _cache.get(key)
-    if cached and now - cached[0] < _CACHE_TTL:
-        return cached[1]
 
     if fast:
-        q = quote(key)
+        # Autocomplete fires on every keystroke, so query only the first
+        # MIN_QUERY characters and re-rank the same result set locally as the
+        # user keeps typing. EA's search is a prefix match, so the stem returns
+        # a superset of anything the longer string would -- which means one
+        # network call per stem, and every keystroke after it is a cache hit.
+        stem = key[:MIN_QUERY]
+        if len(stem) < MIN_QUERY:
+            return []
+        # Namespaced separately: these are single-platform, no prefix-walk
+        # results, and must never satisfy a full search_player() lookup.
+        ckey = f"fast:{stem}"
+        cached = _cache.get(ckey)
+        if cached and now - cached[0] < _CACHE_TTL:
+            return cached[1]
         try:
-            data = _get(f"{BASE}/members/search?platform=common-gen5&memberName={q}", timeout=2)
+            data = _get(f"{BASE}/members/search?platform=common-gen5&memberName={quote(stem)}", timeout=2)
         except Exception:
             return []
         hits = []
         for m in data.get("members", []) or []:
             m["_platform"] = "common-gen5"
             hits.append(m)
-        _cache[key] = (now, hits)
+        _cache[ckey] = (now, hits)
         return hits
+
+    cached = _cache.get(key)
+    if cached and now - cached[0] < _CACHE_TTL:
+        return cached[1]
 
     # EA's search is a PREFIX match with a 4-character minimum: "byfu" finds
     # "Byfuglien x33l", but "yfuglien" finds nothing and "tes" is too short.
@@ -115,12 +129,20 @@ def _all_hits(gamertag: str, fast: bool = False) -> list:
 
 
 def _score(m: dict, want: str) -> tuple:
-    """Rank candidates: exact name first, then prefix, then fuzzy, then games played."""
+    """Rank candidates: exact, then prefix, then substring, then fuzzy, then games played.
+
+    The fuzzy ratio is rounded to two decimals on purpose. Raw ratios almost
+    never tie, so games played -- the thing that actually separates a real
+    player from an abandoned account with the same-ish name -- never got to
+    break anything. Rounding puts near-identical matches in the same bucket and
+    lets the guy with 1,700 games sort above the one with zero.
+    """
     name = str(m.get("name", "")).lower()
     exact = name == want
     prefix = name.startswith(want)
-    ratio = difflib.SequenceMatcher(None, name, want).ratio()
-    return (exact, prefix, ratio, _num(m.get("gamesplayed")))
+    contains = want in name
+    ratio = round(difflib.SequenceMatcher(None, name, want).ratio(), 2)
+    return (exact, prefix, contains, ratio, _num(m.get("gamesplayed")))
 
 
 def _search_sync(gamertag: str):
@@ -134,6 +156,31 @@ def _suggest_sync(query: str, limit: int = 20, fast: bool = False) -> list:
     """Ranked candidates for autocomplete / 'did you mean'."""
     hits = _all_hits(query, fast=fast)
     want = query.strip().lower()
+
+    # The stem query returns a superset in theory, but EA caps how many members
+    # it hands back -- so on a crowded stem ("chel", "goon") a longer tag can be
+    # missing from it entirely. If nothing in the stem set actually starts with
+    # what the user has typed, ask EA for the full string too and merge. Costs a
+    # second call only in the case where the first one was insufficient.
+    if fast and len(want) > MIN_QUERY and not any(
+        str(m.get("name", "")).lower().startswith(want) for m in hits
+    ):
+        now = time.time()
+        ckey = f"fast:{want}"
+        cached = _cache.get(ckey)
+        if cached and now - cached[0] < _CACHE_TTL:
+            extra = cached[1]
+        else:
+            try:
+                data = _get(
+                    f"{BASE}/members/search?platform=common-gen5&memberName={quote(want)}", timeout=2
+                )
+                extra = [dict(m, _platform="common-gen5") for m in data.get("members", []) or []]
+            except Exception:
+                extra = []
+            _cache[ckey] = (now, extra)
+        hits = hits + extra
+
     ranked = sorted(hits, key=lambda m: _score(m, want), reverse=True)
 
     seen, out = set(), []
