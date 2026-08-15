@@ -22,8 +22,8 @@ CHERRY_VOICE_ID = os.getenv("FISH_VOICE_ID_CHERRY", "e9954b46b3174677919d98eb0d1
 # the ramp is done by rendering the script in chunks and joining them, each
 # chunk a step further up in speed and volume. All tunable without a deploy.
 # speed range is 0.5-2.0; volume is a dB offset.
-TORTS_SPEED_START = float(os.getenv("TORTS_SPEED_START", "0.84"))
-TORTS_SPEED_END = float(os.getenv("TORTS_SPEED_END", "1.00"))
+TORTS_SPEED_START = float(os.getenv("TORTS_SPEED_START", "0.86"))
+TORTS_SPEED_END = float(os.getenv("TORTS_SPEED_END", "1.02"))
 TORTS_GAIN_END = float(os.getenv("TORTS_GAIN_END", "4.20"))
 # global nudge on how hard every register hits, loud ones included
 TORTS_EMPHASIS = float(os.getenv("TORTS_EMPHASIS", "1.05"))
