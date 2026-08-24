@@ -847,7 +847,11 @@ CLIP_FLOOR_SECONDS = float(os.getenv("CLIP_FLOOR_SECONDS", "15"))
 # env-overridable so a bad estimate is a variable change, not a deploy.
 VOICE_WPS = {
     "torts": float(os.getenv("WPS_TORTS", "3.6")),
-    "cherry": float(os.getenv("WPS_CHERRY", "2.2")),
+    # Measured 2026-08-24: a capped ~66-word clip ran 15.91s, so the real rate
+    # is ~4 wps. The old 2.2 was extrapolated from the previous rambling
+    # prompt, which read far slower; under it the 66-word cap locked Cherry
+    # out of the 20-30s window entirely (~16s ceiling).
+    "cherry": float(os.getenv("WPS_CHERRY", "4.0")),
 }
 
 def word_cap(voice: str) -> int:

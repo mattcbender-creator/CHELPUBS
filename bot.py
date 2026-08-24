@@ -30,7 +30,7 @@ CLIP_BRAND = os.getenv("CLIP_BRAND", "chelscout.net")
 def clip_file(audio: bytes, command: str) -> discord.File:
     return discord.File(io.BytesIO(audio), filename=f"{CLIP_BRAND}-{command}.mp3")
 
-def log_clip(voice: str, script: str, audio: bytes) -> None:
+def log_clip(voice: str, script: str, audio: bytes, keep_er: bool = False) -> None:
     """Print the real length of a clip against the 20-30s target.
 
     The word budgets are derived from an estimated words-per-second for each
@@ -39,7 +39,12 @@ def log_clip(voice: str, script: str, audio: bytes) -> None:
     guess -- and the measured rate is printed ready to paste.
     """
     secs = vc.mp3_duration(audio)
-    n = len(script.split())
+    # count what was actually spoken -- speak() cleans and caps the script, so
+    # counting the raw script inflated the rate (a 77-word script capped to 66
+    # words logged as 4.84 wps when the voice really read ~4.1)
+    spoken = vc._cap_length(vc._clean_for_speech(script, keep_er=keep_er),
+                            vc.word_cap(voice))
+    n = len(spoken.split())
     if not secs:
         print(f"[clip] {voice}: {n} words, duration unknown")
         return
@@ -366,7 +371,7 @@ async def ask_cherry(interaction: discord.Interaction, question: str):
     try:
         audio, engine = await vc.speak(body, voice_id=vc.CHERRY_VOICE_ID,
                                        max_words=vc.word_cap("cherry"), keep_er=True)
-        log_clip("cherry", body, audio)
+        log_clip("cherry", body, audio, keep_er=True)
     except Exception as e:
         await interaction.followup.send(
             f"Voice shit the bed: `{type(e).__name__}: {e}`\n\n**Q:** {question}\n{body}"[:2000]
@@ -550,7 +555,7 @@ async def pubscout(interaction: discord.Interaction, gamertag: str,
             else:
                 audio, _ = await vc.speak(script, voice_id=vid_fn(),
                                           max_words=cap, keep_er=keep_er)
-            log_clip(voice.value, script, audio)
+            log_clip(voice.value, script, audio, keep_er=keep_er)
             files.append(discord.File(io.BytesIO(audio),
                                       filename=f"{CLIP_BRAND}-pubscout-{voice.value}.mp3"))
         except Exception as e:
