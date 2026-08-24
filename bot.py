@@ -311,11 +311,6 @@ async def ask_buddy(interaction: discord.Interaction, question: str, voice: bool
         return
     await interaction.followup.send(f"**Q:** {question}\n{body}"[:2000])
 
-@tree.command(name="ask-buddy-voice", description="Same as /ask-buddy, but chirped out loud by a Canadian hockey guy")
-@app_commands.describe(question="What do you want to know?")
-async def ask_buddy_voice(interaction: discord.Interaction, question: str):
-    await ask_buddy.callback(interaction, question, voice=True)
-
 @tree.command(name="ask-trump", description="Ask anything, answered in a Trump impression")
 @app_commands.describe(question="What do you want to know?")
 async def ask_trump(interaction: discord.Interaction, question: str):
