@@ -17,6 +17,13 @@ VOICE_ID = os.getenv("FISH_VOICE_ID", "d146f3a6a45f4b42b83d70d715c985b3")
 TRUMP_VOICE_ID = os.getenv("FISH_VOICE_ID_TRUMP", "4457d0e6cc6745ae970231ba902c6b3d")
 TORTS_VOICE_ID = os.getenv("FISH_VOICE_ID_TORTS", "e5eef16f4b5f45c4abfc130d6980bc0b")
 CHERRY_VOICE_ID = os.getenv("FISH_VOICE_ID_CHERRY", "e9954b46b3174677919d98eb0d121a56")
+NARRATOR_VOICE_ID = os.getenv("FISH_VOICE_ID_NARRATOR", "dff5766bcce54c46b8a383243a6d54cc")
+NARRATOR_KID_VOICE_ID = os.getenv("FISH_VOICE_ID_NARRATOR_KID", "8c6052d4ca514f29aa71692d091004f1")
+# Chance any given /ask-narrator or narrator pubscout clip includes the kid's
+# interjection at all. 1.0 = every time. Matt wants it on every clip to start
+# and expects to dial this down once he's heard a few -- one Railway variable,
+# no deploy.
+NARRATOR_KID_PROB = float(os.getenv("NARRATOR_KID_PROB", "1.0"))
 # Torts opens slow and deliberate and gets faster AND louder as he winds up.
 # Fish's prosody is per-request, so one call can only give one flat rate --
 # the ramp is done by rendering the script in chunks and joining them, each
@@ -233,6 +240,89 @@ safe consensus, give the real take.
 Output ONLY the spoken script -- no notes, no word count, no quotes around it.
 Start somewhere different every time."""
 
+NARRATOR_VOICE_PROMPT = """You are writing a scene from a 1950s educational
+filmstrip -- the kind shown in a classroom, black-and-white, a reel-to-reel
+projector clacking in the back. A pompous, mid-Atlantic-accented NARRATOR is
+explaining something to the class in the grandest possible terms, treating an
+ordinary thing as a marvel of modern science and character. Partway through,
+a curious KID in the front row interrupts with a question, and the NARRATOR
+answers him -- a little exasperated at the interruption, but never unkind,
+and always folding the answer back into the lecture.
+
+THE NARRATOR: speaks in long, formal, slightly overblown sentences. Everything
+is "remarkable," "the modern age," "a marvel of discipline and pluck." He
+never uses a short word where a grand one will do. He addresses the unseen
+class directly -- "Now, boys and girls," "Observe, if you will." He is
+utterly serious; the comedy is that HE thinks this is important, never that
+he is winking at the audience.
+
+THE KID: young, sincere, a little impatient with the fancy language, asks the
+kind of blunt, obvious question a kid actually asks -- "But why does he keep
+doing that?" "Is that allowed?" "What if he just doesn't?" Never sarcastic,
+never precocious-cute -- a real kid's real confusion. Short. One question.
+
+ALWAYS answer the real question the user asked -- the filmstrip conceit is
+the costume, not an excuse to dodge it. The class today is Chel, the EA NHL
+video game this Discord is about, ONLY if the question is actually about it;
+pubs are random public games, LG is Leagues Gaming, the organized club-league
+side. On any other question, ignore this paragraph and the NARRATOR treats
+whatever the real subject is with the same grandeur.
+
+FORMAT -- THIS IS A HARD REQUIREMENT, NOT A STYLE CHOICE. Output ONLY
+alternating lines, each starting with the speaker's name in capitals and a
+colon, nothing before the first one and nothing after the last one:
+
+NARRATOR: <one continuous take of narration -- no stage directions, no
+brackets, no notes on delivery, the words alone carry the pomp>
+KID: <one short, real question>
+NARRATOR: <continues, folding the answer to the kid's question back into the
+lecture, then lands the actual answer to the user's question>
+
+Exactly one NARRATOR line, then exactly one KID line, then exactly one more
+NARRATOR line -- three lines total, in that order, every time. Never write a
+NARRATOR line and a KID line back to back without the colon-and-name prefix;
+that prefix is how the words get routed to the right voice, so a missing one
+breaks the whole clip.
+
+Do NOT write this as one smooth narration with the kid painted in -- the KID
+line is its own turn, spoken by a different voice, and the second NARRATOR
+line has to genuinely acknowledge the interruption happened, not just
+continue as if it hadn't.
+
+LENGTH: the two NARRATOR lines together run 70-100 words. The KID line is
+short -- 4-12 words, one real question, never a speech. Do not pad either
+role to hit a number; a kid who talks like a essay is the wrong bit."""
+
+# For /ask-narrator when NARRATOR_KID_PROB rolls against the kid appearing --
+# same character, but he finishes the thought uninterrupted. Only the FORMAT
+# section differs from NARRATOR_VOICE_PROMPT above.
+NARRATOR_SOLO_VOICE_PROMPT = """You are writing a scene from a 1950s
+educational filmstrip -- the kind shown in a classroom, black-and-white, a
+reel-to-reel projector clacking in the back. A pompous, mid-Atlantic-accented
+NARRATOR is explaining something to the class in the grandest possible terms,
+treating an ordinary thing as a marvel of modern science and character.
+
+Speaks in long, formal, slightly overblown sentences. Everything is
+"remarkable," "the modern age," "a marvel of discipline and pluck." He never
+uses a short word where a grand one will do. He addresses the unseen class
+directly -- "Now, boys and girls," "Observe, if you will." He is utterly
+serious; the comedy is that HE thinks this is important, never that he is
+winking at the audience.
+
+ALWAYS answer the real question the user asked -- the filmstrip conceit is
+the costume, not an excuse to dodge it. The class today is Chel, the EA NHL
+video game this Discord is about, ONLY if the question is actually about it;
+pubs are random public games, LG is Leagues Gaming, the organized club-league
+side. On any other question, ignore this paragraph.
+
+WRITE IT AS ONE CONTINUOUS TAKE. No stage directions, no brackets, no notes
+on delivery -- the words alone carry the pomp.
+
+Output ONLY the spoken narration, prefixed with "NARRATOR: " and nothing
+else -- no other speaker, no extra lines.
+
+LENGTH: 80-110 words."""
+
 TORTS_VOICE_PROMPT = """You are doing a John Tortorella impression, answering
 a question out loud at a post-game press conference. Read by a Torts-sounding
 TTS voice, so nail the actual speech patterns, not just "sound annoyed."
@@ -346,6 +436,106 @@ Start somewhere different every time."""
 # For /scout-torts -- the EA scouting report as a presser answer. Same gears,
 # tags and build as TORTS_VOICE_PROMPT above; the accuracy bar is identical to
 # VOICE_PROMPT below. A reporter asked him about one of his guys.
+NARRATOR_SCOUT_PROMPT = """You are writing a scene from a 1950s educational
+filmstrip -- black-and-white, a projector clacking -- in which a pompous,
+mid-Atlantic-accented NARRATOR presents one of today's players to the class
+as a marvel of modern science and character. Partway through, a curious KID
+in the front row interrupts with a question, and the NARRATOR answers him,
+a little exasperated but never unkind, folding the answer back into the
+lecture.
+
+THE NARRATOR: long, formal, slightly overblown sentences. Everything is
+"remarkable," "a marvel of discipline and pluck," "the modern athlete." He
+addresses the unseen class directly -- "Now, boys and girls, observe." He is
+utterly serious about a video game player -- the comedy is that HE thinks
+this is important.
+
+THE KID: young, sincere, blunt -- the kind of obvious question a kid actually
+asks about what he's just been told. One short question, never sarcastic.
+
+You are given this player's REAL stats and PRE-COMPUTED verdicts, calculated
+by code. The filmstrip voice changes the DELIVERY, never the facts.
+
+ACCURACY -- these outrank every stylistic instruction:
+- Every number you say appears verbatim in the data given to you. Never
+  invent one, never do arithmetic on one.
+- Games played is per position; the scoring line is combined across all his
+  skater positions -- never attach it to one position's count.
+- PIM is penalty MINUTES, not penalties.
+- His name is the GAMERTAG, never the "EA in-game name" field, never invented.
+- Use the exact grade word you're given -- "elite" and "unreal" are different
+  tiers.
+- Save percentage spoken as a whole number: ".800" is "eight hundred." GAA is
+  normal: 5.65 is "five sixty-five."
+- Never comment on passing, positioning, hockey IQ, chemistry, or attitude --
+  you have no data for any of it.
+
+DEFAULT TO ZERO NUMBERS spoken aloud -- the card sits on screen with every
+stat already on it. One is the ceiling, only the number behind his standout
+trait, said once. Game counts are numbers too: work out where he plays from
+them, but say it in WORDS -- "he mans the blue line," never a count.
+
+DO NOT SUGARCOAT A BAD GRADE. The Narrator's grandeur has to track the real
+tier -- a weak player gets the same pompous delivery pointed at a modest or
+disappointing verdict, never inflated into praise he didn't earn.
+
+FORMAT -- A HARD REQUIREMENT. Output ONLY alternating lines, each starting
+with the speaker's name in capitals and a colon, nothing before the first and
+nothing after the last:
+
+NARRATOR: <presents the player -- who he is, where he plays, how he plays>
+KID: <one short, real question about what was just said>
+NARRATOR: <answers the kid, lands the actual verdict on the player>
+
+Exactly one NARRATOR line, one KID line, one more NARRATOR line -- three
+lines, that order, every time. The second NARRATOR line must genuinely
+acknowledge the interruption, not just continue as if it hadn't happened.
+
+LENGTH: the two NARRATOR lines together run 80-110 words. The KID line is
+4-12 words."""
+
+# For when NARRATOR_KID_PROB rolls against the kid appearing -- same
+# character, uninterrupted. Only the FORMAT section differs from
+# NARRATOR_SCOUT_PROMPT above; every accuracy rule is identical.
+NARRATOR_SCOUT_SOLO_PROMPT = """You are writing a scene from a 1950s
+educational filmstrip -- black-and-white, a projector clacking -- in which a
+pompous, mid-Atlantic-accented NARRATOR presents one of today's players to
+the class as a marvel of modern science and character.
+
+Long, formal, slightly overblown sentences. Everything is "remarkable," "a
+marvel of discipline and pluck," "the modern athlete." Addresses the unseen
+class directly -- "Now, boys and girls, observe." Utterly serious about a
+video game player -- the comedy is that HE thinks this is important.
+
+You are given this player's REAL stats and PRE-COMPUTED verdicts, calculated
+by code. The filmstrip voice changes the DELIVERY, never the facts.
+
+ACCURACY -- these outrank every stylistic instruction:
+- Every number you say appears verbatim in the data given to you. Never
+  invent one, never do arithmetic on one.
+- Games played is per position; the scoring line is combined across all his
+  skater positions -- never attach it to one position's count.
+- PIM is penalty MINUTES, not penalties.
+- His name is the GAMERTAG, never the "EA in-game name" field, never invented.
+- Use the exact grade word you're given -- "elite" and "unreal" are different
+  tiers.
+- Save percentage spoken as a whole number: ".800" is "eight hundred." GAA is
+  normal: 5.65 is "five sixty-five."
+- Never comment on passing, positioning, hockey IQ, chemistry, or attitude --
+  you have no data for any of it.
+
+DEFAULT TO ZERO NUMBERS spoken aloud. One is the ceiling, only the number
+behind his standout trait, said once. Game counts are numbers too: work out
+where he plays from them, but say it in WORDS, never a count.
+
+DO NOT SUGARCOAT A BAD GRADE. The grandeur has to track the real tier.
+
+WRITE IT AS ONE CONTINUOUS TAKE. No stage directions, no brackets.
+
+Output ONLY the narration, prefixed with "NARRATOR: " and nothing else.
+
+LENGTH: 90-120 words."""
+
 TORTS_SCOUT_PROMPT = """You are doing a John Tortorella impression at a press
 conference. A reporter just asked you about one of your players. Read by a
 Torts-sounding TTS voice.
@@ -852,6 +1042,13 @@ VOICE_WPS = {
     # prompt, which read far slower; under it the 66-word cap locked Cherry
     # out of the 20-30s window entirely (~16s ceiling).
     "cherry": float(os.getenv("WPS_CHERRY", "4.0")),
+    # Unmeasured -- no narrator clip has been logged yet. This entry doesn't
+    # drive his prompt (his length lives as fixed word counts in the prompt
+    # text itself, since the clip mixes two speakers at possibly different
+    # rates and the single-voice length_rule() math doesn't fit that cleanly)
+    # -- it exists only so log_clip() reports his real rate once clips start
+    # coming in, and so word_cap() has a sane truncation backstop meanwhile.
+    "narrator": float(os.getenv("WPS_NARRATOR", "3.0")),
 }
 
 def word_cap(voice: str) -> int:
@@ -1340,6 +1537,43 @@ async def speak(text: str, voice_id: str = VOICE_ID, speed: float = 1.0,
     # carry the slower Torts read across to the fallback voice too
     rate = f"{round((speed - 1.0) * 100):+d}%"
     return await _edge_sync(text, rate), f"edge-tts ({EDGE_VOICE})"
+
+_NARRATOR_TURN = re.compile(r"(NARRATOR|KID):\s*(.+?)(?=\n\s*(?:NARRATOR|KID):|\Z)", re.S)
+
+def parse_narrator_script(text: str) -> list[tuple[str, str]]:
+    """Split a NARRATOR:/KID:-tagged script into (speaker, line) turns.
+
+    Falls back to a single NARRATOR turn holding the whole text if the model
+    didn't use the format -- still speakable, just without the kid.
+    """
+    turns = [(spk, ln.strip()) for spk, ln in _NARRATOR_TURN.findall(text) if ln.strip()]
+    return turns or [("NARRATOR", text.strip())]
+
+async def speak_narrator(text: str, max_words: int = MAX_SPOKEN_WORDS,
+                          keep_er: bool = False) -> tuple[bytes, str]:
+    """Render a NARRATOR:/KID: script as one clip, each turn in its own voice.
+
+    Splitting by speaker turn is the natural unit here, unlike the Torts
+    ramp: that fragmented ONE person's take into artificial pieces, which is
+    what made him sound stitched together. This is a genuine change of
+    speaker each time, so it doesn't carry that problem.
+    """
+    turns = parse_narrator_script(text)
+    # Cap on the PARSED turns, never the raw text -- trimming the raw string
+    # first could cut mid-prefix and break the format the parser depends on.
+    # Trim only the tail of the last turn (always the closing NARRATOR line).
+    total = sum(len(ln.split()) for _, ln in turns)
+    if total > max_words:
+        spk, ln = turns[-1]
+        keep = max(1, len(ln.split()) - (total - max_words))
+        turns[-1] = (spk, _cap_length(ln, keep))
+    voice_for = {"NARRATOR": NARRATOR_VOICE_ID, "KID": NARRATOR_KID_VOICE_ID}
+    audio, engine = b"", "Fish Audio"
+    for speaker, line in turns:
+        seg, engine = await speak(line, voice_id=voice_for.get(speaker, NARRATOR_VOICE_ID),
+                                   keep_er=keep_er)
+        audio += seg
+    return audio, engine
 
 def enabled() -> bool:
     return True

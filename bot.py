@@ -2,6 +2,7 @@ import asyncio
 import difflib
 import io
 import os
+import random
 import re
 import certifi
 os.environ.setdefault("SSL_CERT_FILE", certifi.where())
@@ -433,6 +434,45 @@ async def ask_torts(interaction: discord.Interaction, question: str):
     clip = clip_file(audio, "ask-torts")
     await interaction.followup.send(f"**Q:** {question}"[:2000], file=clip)
 
+@tree.command(name="ask-narrator", description="Ask anything, narrated like a 1950s classroom filmstrip")
+@app_commands.describe(question="What do you want to know?")
+async def ask_narrator(interaction: discord.Interaction, question: str):
+    await interaction.response.defer()
+    question, people = await resolve_mentions(interaction, question)
+    note = await player_note(people)
+    # Rolled once per clip, not per retry -- a failed generation shouldn't
+    # flip whether the kid shows up this time.
+    with_kid = random.random() < vc.NARRATOR_KID_PROB
+    prompt = vc.NARRATOR_VOICE_PROMPT if with_kid else vc.NARRATOR_SOLO_VOICE_PROMPT
+    try:
+        resp = await call_llm(
+            messages=[
+                {"role": "system", "content": prompt},
+                *([{"role": "system", "content": note}] if note else []),
+                {"role": "user", "content": question},
+            ],
+            max_tokens=260,
+            temperature=0.8,
+        )
+        answer = vc.strip_language_reactions((resp.choices[0].message.content or "").strip())
+    except Exception as e:
+        await interaction.followup.send(f"OpenRouter shit the bed: `{type(e).__name__}: {e}`")
+        return
+    body = answer or "NARRATOR: Got nothing back. Try again."
+    try:
+        audio, engine = await vc.speak_narrator(body, max_words=vc.word_cap("narrator"))
+        # NARRATOR:/KID: labels aren't spoken -- log the content only, or the
+        # word count (and so the measured wps) would be inflated by them.
+        spoken_only = " ".join(ln for _, ln in vc.parse_narrator_script(body))
+        log_clip("narrator", spoken_only, audio)
+    except Exception as e:
+        await interaction.followup.send(
+            f"Voice shit the bed: `{type(e).__name__}: {e}`\n\n**Q:** {question}\n{body}"[:2000]
+        )
+        return
+    clip = clip_file(audio, "ask-narrator")
+    await interaction.followup.send(f"**Q:** {question}"[:2000], file=clip)
+
 # The card shows every number already, so the read exists to say what they
 # MEAN. Short, because it sits in a fixed-height block on the card.
 CARD_READ_PROMPT = """You write the headline read at the TOP of a scouting
@@ -486,6 +526,7 @@ VOICES = {
     app_commands.Choice(name="Tortorella", value="torts"),
     app_commands.Choice(name="Trump", value="trump"),
     app_commands.Choice(name="Don Cherry", value="cherry"),
+    app_commands.Choice(name="1950s Filmstrip", value="narrator"),
 ])
 async def pubscout(interaction: discord.Interaction, gamertag: str,
                    voice: app_commands.Choice[str] = None):
@@ -533,7 +574,26 @@ async def pubscout(interaction: discord.Interaction, gamertag: str,
     files = [discord.File(io.BytesIO(png),
                           filename=f"{CLIP_BRAND}-pubscout-{m.get('name')}.png")]
 
-    if voice:
+    if voice and voice.value == "narrator":
+        # Two speakers, not the (prompt, single voice_id) shape every other
+        # entry in VOICES fits -- handled separately rather than forcing that
+        # table into a shape it doesn't naturally have.
+        try:
+            with_kid = random.random() < vc.NARRATOR_KID_PROB
+            prompt = vc.NARRATOR_SCOUT_PROMPT if with_kid else vc.NARRATOR_SCOUT_SOLO_PROMPT
+            resp = await call_llm(
+                messages=[{"role": "system", "content": prompt},
+                          {"role": "user", "content": block}],
+                max_tokens=260, temperature=0.9)
+            script = ea.enforce_grade_word((resp.choices[0].message.content or "").strip(), standout)
+            audio, _ = await vc.speak_narrator(script, max_words=vc.word_cap("narrator"))
+            spoken_only = " ".join(ln for _, ln in vc.parse_narrator_script(script))
+            log_clip("narrator", spoken_only, audio)
+            files.append(discord.File(io.BytesIO(audio),
+                                      filename=f"{CLIP_BRAND}-pubscout-narrator.mp3"))
+        except Exception as e:
+            print(f"[pubscout] voice failed: {type(e).__name__}: {e}")
+    elif voice:
         prompt_fn, vid_fn, ramped, max_words, keep_er = VOICES[voice.value]
         try:
             sys_prompt = prompt_fn()
