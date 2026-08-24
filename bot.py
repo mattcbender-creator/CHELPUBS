@@ -30,6 +30,23 @@ CLIP_BRAND = os.getenv("CLIP_BRAND", "chelscout.net")
 def clip_file(audio: bytes, command: str) -> discord.File:
     return discord.File(io.BytesIO(audio), filename=f"{CLIP_BRAND}-{command}.mp3")
 
+def log_clip(voice: str, script: str, audio: bytes) -> None:
+    """Print the real length of a clip against the 20-30s target.
+
+    The word budgets are derived from an estimated words-per-second for each
+    voice, which is exactly the kind of number that drifts. Logging what came
+    back turns the next correction into a WPS_* variable change instead of a
+    guess -- and the measured rate is printed ready to paste.
+    """
+    secs = vc.mp3_duration(audio)
+    n = len(script.split())
+    if not secs:
+        print(f"[clip] {voice}: {n} words, duration unknown")
+        return
+    verdict = "ok" if vc.CLIP_MIN_SECONDS <= secs <= vc.CLIP_MAX_SECONDS else "OUT OF RANGE"
+    print(f"[clip] {voice}: {secs}s / {n} words = {n / secs:.2f} wps "
+          f"(target {vc.CLIP_MIN_SECONDS:.0f}-{vc.CLIP_MAX_SECONDS:.0f}s) {verdict}")
+
 _MENTION = re.compile(r"<@!?(\d+)>")
 
 # How sure we have to be that a Discord user IS a given EA player before
@@ -331,7 +348,8 @@ async def ask_cherry(interaction: discord.Interaction, question: str):
     try:
         resp = await call_llm(
             messages=[
-                {"role": "system", "content": vc.CHERRY_VOICE_PROMPT},
+                {"role": "system",
+                 "content": vc.CHERRY_VOICE_PROMPT + "\n\n" + vc.length_rule("cherry")},
                 *([{"role": "system", "content": note}] if note else []),
                 {"role": "user", "content": question},
             ],
@@ -345,7 +363,8 @@ async def ask_cherry(interaction: discord.Interaction, question: str):
     body = answer or "Got nothing back. Try again."
     try:
         audio, engine = await vc.speak(body, voice_id=vc.CHERRY_VOICE_ID,
-                                       keep_er=True)
+                                       max_words=vc.word_cap("cherry"), keep_er=True)
+        log_clip("cherry", body, audio)
     except Exception as e:
         await interaction.followup.send(
             f"Voice shit the bed: `{type(e).__name__}: {e}`\n\n**Q:** {question}\n{body}"[:2000]
@@ -361,7 +380,7 @@ async def ask_torts(interaction: discord.Interaction, question: str):
     question, people = await resolve_mentions(interaction, question)
     note = await player_note(people)
     msgs = [
-        {"role": "system", "content": vc.TORTS_VOICE_PROMPT},
+        {"role": "system", "content": vc.TORTS_VOICE_PROMPT + "\n\n" + vc.length_rule("torts")},
         *([{"role": "system", "content": note}] if note else []),
         {"role": "user", "content": question},
     ]
@@ -390,7 +409,9 @@ async def ask_torts(interaction: discord.Interaction, question: str):
             body, vc.TORTS_VOICE_ID, vc.TORTS_SPEED_START, vc.TORTS_SPEED_END,
             end_gain=vc.TORTS_GAIN_END, steps=vc.TORTS_RAMP_STEPS,
             temp_start=vc.TORTS_TTS_TEMP_START, temp_end=vc.TORTS_TTS_TEMP_END,
+            max_words=vc.word_cap("torts"),
         )
+        log_clip("torts", body, audio)
     except Exception as e:
         await interaction.followup.send(
             f"Voice shit the bed: `{type(e).__name__}: {e}`\n\n**Q:** {question}\n{body}"[:2000]
@@ -502,19 +523,26 @@ async def pubscout(interaction: discord.Interaction, gamertag: str,
     if voice:
         prompt_fn, vid_fn, ramped, max_words, keep_er = VOICES[voice.value]
         try:
+            sys_prompt = prompt_fn()
+            rule = vc.length_rule(voice.value)
+            if rule:
+                sys_prompt = f"{sys_prompt}\n\n{rule}"
             resp = await call_llm(
-                messages=[{"role": "system", "content": prompt_fn()},
+                messages=[{"role": "system", "content": sys_prompt},
                           {"role": "user", "content": block}],
                 max_tokens=220, temperature=0.9)
             script = ea.enforce_grade_word((resp.choices[0].message.content or "").strip(), standout)
+            cap = min(max_words, vc.word_cap(voice.value))
             if ramped:
                 audio, _ = await vc.speak_ramped(
                     script, vid_fn(), vc.TORTS_SPEED_START, vc.TORTS_SPEED_END,
                     end_gain=vc.TORTS_GAIN_END, steps=vc.TORTS_RAMP_STEPS,
-                    temp_start=vc.TORTS_TTS_TEMP_START, temp_end=vc.TORTS_TTS_TEMP_END)
+                    temp_start=vc.TORTS_TTS_TEMP_START, temp_end=vc.TORTS_TTS_TEMP_END,
+                    max_words=cap)
             else:
                 audio, _ = await vc.speak(script, voice_id=vid_fn(),
-                                          max_words=max_words, keep_er=keep_er)
+                                          max_words=cap, keep_er=keep_er)
+            log_clip(voice.value, script, audio)
             files.append(discord.File(io.BytesIO(audio),
                                       filename=f"{CLIP_BRAND}-pubscout-{voice.value}.mp3"))
         except Exception as e:

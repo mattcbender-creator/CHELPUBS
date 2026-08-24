@@ -230,8 +230,6 @@ at the bit, never self-aware. He means every word.
 Same political lean and bluntness as everything else here -- no hedging, no
 safe consensus, give the real take.
 
-Target 80-100 words. Hard cap 110.
-
 Output ONLY the spoken script -- no notes, no word count, no quotes around it.
 Start somewhere different every time."""
 
@@ -313,7 +311,7 @@ takes, blunt opinions.
 Output ONLY the spoken script -- no planning, no notes, no word counts, no
 quotes around it. The first character is the first word out of his mouth.
 
-Target 80-100 words. Hard cap 110. Start somewhere different every time."""
+Start somewhere different every time."""
 
 # For /scout-torts -- the EA scouting report as a presser answer. Same gears,
 # tags and build as TORTS_VOICE_PROMPT above; the accuracy bar is identical to
@@ -420,8 +418,7 @@ instead of spoken, and that is the worst thing this clip can be.
 Output ONLY the spoken script -- no planning, no notes, no word counts, no
 quotes around it. The first character is the first word out of his mouth.
 
-Target 90-110 words. Hard cap 120. Start somewhere
-different every time."""
+Start somewhere different every time."""
 
 # For /pubscout's cherry voice -- the EA scouting report, same Don Cherry
 # impression, but the CONTENT rules are identical to VOICE_PROMPT below: real
@@ -531,7 +528,7 @@ real quote and not content to reuse:
   in the corner. He'll touch ya, and he'll do it in the third when it hurts.
   Good Canadian boy, that one."
 
-Target 90-110 words. Hard cap 120. Land the verdict and stop."""
+Land the verdict and stop."""
 
 # For /scout-trump -- the EA scouting report, same Trump impression, but the
 # CONTENT rules are identical to VOICE_PROMPT below: real stats only, no
@@ -798,6 +795,83 @@ async def _edge_sync(text: str, rate: str = "+0%") -> bytes:
 
 MAX_SPOKEN_WORDS = 155
 
+# ---------------------------------------------------------------- clip length
+# The real constraint is DURATION, not words: every clip has to land in
+# 20-30 seconds. Word count is only a proxy for it, and the proxy is different
+# for every voice -- Trump reads about 3.5 words a second, Cherry barely over
+# two, because the clone drawls and loops. Giving them all the same word target
+# is what put Cherry at ~50 seconds while Trump sat comfortably in range.
+# So: budget SECONDS, convert to words per voice, and measure what actually
+# came back so these numbers stop being guesses.
+CLIP_MIN_SECONDS = float(os.getenv("CLIP_MIN_SECONDS", "20"))
+CLIP_MAX_SECONDS = float(os.getenv("CLIP_MAX_SECONDS", "30"))
+
+# Spoken words per second, per voice. Only voices listed here are managed --
+# anything absent keeps the old global behaviour untouched. Every value is
+# env-overridable so a bad estimate is a variable change, not a deploy.
+VOICE_WPS = {
+    "torts": float(os.getenv("WPS_TORTS", "3.6")),
+    "cherry": float(os.getenv("WPS_CHERRY", "2.2")),
+}
+
+def word_cap(voice: str) -> int:
+    """Hard word ceiling that keeps this voice under CLIP_MAX_SECONDS."""
+    wps = VOICE_WPS.get(voice)
+    return MAX_SPOKEN_WORDS if wps is None else max(20, round(CLIP_MAX_SECONDS * wps))
+
+def length_rule(voice: str) -> str:
+    """The length line to append to this voice's prompt, or '' if unmanaged.
+
+    Aims at the lower half of the window and hard-caps at the top of it, so a
+    clip that overshoots the target still lands inside 20-30s rather than
+    getting truncated mid-sentence by word_cap().
+    """
+    wps = VOICE_WPS.get(voice)
+    if wps is None:
+        return ""
+    lo = round(CLIP_MIN_SECONDS * wps)
+    hi = round((CLIP_MIN_SECONDS + CLIP_MAX_SECONDS) / 2 * wps)
+    return f"Target {lo}-{hi} words. Hard cap {word_cap(voice)}."
+
+# MPEG audio frame tables, enough to total up a Fish mp3 without a dependency.
+_MP3_BITRATE = {
+    1: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0],
+    2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0],
+}
+_MP3_RATE = {3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000]}
+
+def mp3_duration(audio: bytes) -> float | None:
+    """Seconds of audio in an mp3, by walking its frame headers.
+
+    Works on the concatenated multi-render output too, since it just sums
+    every frame it finds and skips anything that isn't one.
+    """
+    i, total, n = 0, 0.0, len(audio)
+    if audio[:3] == b"ID3" and n > 10:  # skip the tag, its size is syncsafe
+        i = 10 + int.from_bytes(audio[6:10], "big", signed=False) & 0x0FFFFFFF
+        i = min(i, n)
+    while i < n - 4:
+        if audio[i] != 0xFF or (audio[i + 1] & 0xE0) != 0xE0:
+            i += 1
+            continue
+        h = audio[i + 1:i + 4]
+        ver_bits, layer_bits = (h[0] >> 3) & 0x03, (h[0] >> 1) & 0x03
+        br_i, sr_i, pad = (h[1] >> 4) & 0x0F, (h[1] >> 2) & 0x03, (h[1] >> 1) & 0x01
+        if ver_bits == 1 or layer_bits != 1 or br_i in (0, 15) or sr_i == 3:
+            i += 1  # reserved version, not layer III, or a free/bad rate
+            continue
+        mpeg1 = ver_bits == 3
+        rate = _MP3_RATE[ver_bits][sr_i]
+        bitrate = _MP3_BITRATE[1 if mpeg1 else 2][br_i] * 1000
+        samples = 1152 if mpeg1 else 576
+        length = int(samples // 8 * bitrate // rate) + pad
+        if length <= 4:
+            i += 1
+            continue
+        total += samples / rate
+        i += length
+    return round(total, 2) if total else None
+
 # Fish S2.1 delivery tags are open-domain natural language, not a fixed list
 # -- "[quiet, controlled anger]" is as valid as "[angry]". So don't police the
 # vocabulary; just unwrap bracket contents that clearly aren't a direction (a
@@ -906,8 +980,8 @@ _TORTS_DODGE = re.compile(
 )
 # tuned against measured audio: ~3.6 spoken words/sec at the Torts ramp, so
 # this band keeps clips inside the 20-30s target
-TORTS_MIN_WORDS = 80
-TORTS_MAX_WORDS = 110
+TORTS_MIN_WORDS = round(CLIP_MIN_SECONDS * VOICE_WPS["torts"])
+TORTS_MAX_WORDS = word_cap("torts")
 
 # A reasoning leak reads like notes, not speech. Length alone can't catch it
 # now that real answers run long, so match the shape of the leak instead.
@@ -938,14 +1012,15 @@ def torts_retry_note(text: str) -> str | None:
         )
     if n < TORTS_MIN_WORDS:
         return (
-            f"Too short -- that was {n} words and the clip needs 80-100. Same "
+            f"Too short -- that was {n} words and the clip needs "
+            f"{TORTS_MIN_WORDS}-{TORTS_MAX_WORDS}. Same "
             "answer, same voice, but keep going: he answers, then he can't help "
             "himself and gets into what actually bothers him about it. Do not "
             "pad with filler, give him more to say."
         )
     if n > TORTS_MAX_WORDS:
         return (
-            f"Too long -- that was {n} words and the hard cap is 110. Same answer, "
+            f"Too long -- that was {n} words and the hard cap is {TORTS_MAX_WORDS}. Same answer, "
             "tightened, still ending on the biggest line."
         )
     return None
@@ -1140,16 +1215,17 @@ async def speak_ramped(
     temp_start: float | None = None,
     temp_end: float | None = None,
     keep_er: bool = False,
+    max_words: int = MAX_SPOKEN_WORDS,
 ) -> tuple[bytes, str]:
     """Open measured and quiet, then climb -- each chunk faster and louder.
 
     Fish applies prosody per request, so the only way to escalate inside one
     clip is to render it in pieces and join them.
     """
-    text = _cap_length(_clean_for_speech(text, keep_er=keep_er))
+    text = _cap_length(_clean_for_speech(text, keep_er=keep_er), max_words)
     if not TORTS_RAMP:
         # The default: one continuous render, exactly like the Trump path.
-        return await speak(text, voice_id, TORTS_FLAT_SPEED, keep_er=keep_er)
+        return await speak(text, voice_id, TORTS_FLAT_SPEED, max_words, keep_er=keep_er)
     if os.getenv("FISH_API_KEY"):
         # prefer cutting where the delivery actually changes; fall back to
         # even chunks only when the script carries no usable tags
