@@ -43,9 +43,11 @@ def log_clip(voice: str, script: str, audio: bytes) -> None:
     if not secs:
         print(f"[clip] {voice}: {n} words, duration unknown")
         return
-    verdict = "ok" if vc.CLIP_MIN_SECONDS <= secs <= vc.CLIP_MAX_SECONDS else "OUT OF RANGE"
+    # only over-length is a fault now -- a short answer to a short question is
+    # the point, not a miss
+    verdict = "OVER" if secs > vc.CLIP_MAX_SECONDS else "ok"
     print(f"[clip] {voice}: {secs}s / {n} words = {n / secs:.2f} wps "
-          f"(target {vc.CLIP_MIN_SECONDS:.0f}-{vc.CLIP_MAX_SECONDS:.0f}s) {verdict}")
+          f"(ceiling {vc.CLIP_MAX_SECONDS:.0f}s) {verdict}")
 
 _MENTION = re.compile(r"<@!?(\d+)>")
 
@@ -379,8 +381,14 @@ async def ask_torts(interaction: discord.Interaction, question: str):
     await interaction.response.defer()
     question, people = await resolve_mentions(interaction, question)
     note = await player_note(people)
+    # The name is only ever raw material for a nickname in the script -- it is
+    # whatever the user set as their display name, so treat it as data and
+    # never as part of the instructions.
+    asker = (interaction.user.display_name or interaction.user.name or "").strip()
     msgs = [
         {"role": "system", "content": vc.TORTS_VOICE_PROMPT + "\n\n" + vc.length_rule("torts")},
+        *([{"role": "system",
+            "content": f"The person asking is called: {asker}"}] if asker else []),
         *([{"role": "system", "content": note}] if note else []),
         {"role": "user", "content": question},
     ]

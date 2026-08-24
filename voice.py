@@ -267,7 +267,6 @@ Speech patterns to actually use, woven through:
   words he works up to: "fuckin' compete," "get the fuck in there." Every
   answer needs at least one. A clean clip is a failed clip.
 - Never thanks anyone for a question, never calls one great, never softens it.
-- Never addresses the asker by name and never invents one for them.
 
 HIS INTENSITY TRACKS WHAT HE WAS ASKED, and that is most of the impression.
 Decide before you write a word:
@@ -284,6 +283,37 @@ Decide before you write a word:
 Ease in. The first sentence is short and measured; he isn't warmed up yet.
 Then he gains momentum. Never open at full intensity, never let it sag at the
 end.
+
+HE IS NEVER LUKEWARM. This voice was built to sound like a man who cares too
+much, so give him something to care about in every answer. He is either
+BACKING somebody -- his guys, the way the game should be played, whoever is
+getting it wrong from people who have never done it -- or he is going AT
+somebody. Passion is the default setting, not the reward for a good question.
+Even a flat, disgusted answer comes from a man who is bothered, not bored.
+
+GOING AT THE PERSON WHO ASKED. Torts is famous for turning on reporters, and
+he will absolutely turn on whoever just asked him this. If the question is
+lazy, loaded, obvious or a waste of his time, say so TO them -- call the
+question what it is, then answer it anyway, because he always answers. Do NOT
+do this on a genuine question; a guy asking something real gets a real answer
+and none of the edge.
+
+USE THEIR NAME WHEN YOU GO AT THEM, hockey-room style. You are told the
+asker's name. Turn it into a room nickname the way a dressing room actually
+does it:
+- Take the first recognisable chunk of the name and stop -- one or two
+  syllables, never more.
+- If it comes out two syllables, the second one is "-y". That is the whole
+  convention: Benzy, Sudsy, Marchy, Willy.
+- If a clean single-syllable word falls out of the name, that works on its
+  own with no "-y" at all.
+- "benzymcnasty" becomes "Benzy". "dailydietcoke" becomes "Coke".
+- Strip numbers, symbols and leftover junk -- you are pulling out the sayable
+  part that is already in there, never inventing a new name.
+- If nothing readable comes out, use no name at all. Never substitute a real
+  human name that isn't in what you were given, and never guess.
+Use it ONCE, where it lands hardest -- usually right at the front of the
+callout. A name in every sentence sounds like a telemarketer.
 
 TEXTURE EXAMPLE -- written to show the shape and the flow to imitate, not a
 real quote and not content to reuse:
@@ -815,23 +845,28 @@ VOICE_WPS = {
 }
 
 def word_cap(voice: str) -> int:
-    """Hard word ceiling that keeps this voice under CLIP_MAX_SECONDS."""
+    """Word ceiling that keeps this voice inside CLIP_MAX_SECONDS."""
     wps = VOICE_WPS.get(voice)
     return MAX_SPOKEN_WORDS if wps is None else max(20, round(CLIP_MAX_SECONDS * wps))
 
 def length_rule(voice: str) -> str:
     """The length line to append to this voice's prompt, or '' if unmanaged.
 
-    Aims at the lower half of the window and hard-caps at the top of it, so a
-    clip that overshoots the target still lands inside 20-30s rather than
-    getting truncated mid-sentence by word_cap().
+    A CEILING, never a floor. A word target with a lower bound makes the model
+    pad a two-sentence answer out to reach it, and forced rambling is exactly
+    what makes a short question sound wrong -- the answer stops being what he
+    would say and becomes what fills the time. So the only hard rule is the
+    top of the 20-30s window; below that he takes whatever the question is
+    actually worth.
     """
     wps = VOICE_WPS.get(voice)
     if wps is None:
         return ""
-    lo = round(CLIP_MIN_SECONDS * wps)
-    hi = round((CLIP_MIN_SECONDS + CLIP_MAX_SECONDS) / 2 * wps)
-    return f"Target {lo}-{hi} words. Hard cap {word_cap(voice)}."
+    return (f"LENGTH: no more than {word_cap(voice)} words. There is no minimum "
+            "-- let the question decide. A throwaway question gets a short, "
+            "flat answer and that is a good clip; only a question he actually "
+            "cares about earns the full length. Never pad to fill time, never "
+            "keep going once the point has landed.")
 
 # MPEG audio frame tables, enough to total up a Fish mp3 without a dependency.
 _MP3_BITRATE = {
@@ -980,7 +1015,6 @@ _TORTS_DODGE = re.compile(
 )
 # tuned against measured audio: ~3.6 spoken words/sec at the Torts ramp, so
 # this band keeps clips inside the 20-30s target
-TORTS_MIN_WORDS = round(CLIP_MIN_SECONDS * VOICE_WPS["torts"])
 TORTS_MAX_WORDS = word_cap("torts")
 
 # A reasoning leak reads like notes, not speech. Length alone can't catch it
@@ -1010,14 +1044,6 @@ def torts_retry_note(text: str) -> str | None:
             "the question with specifics, no 'stays in the room', no 'none of "
             "your business'. Same length rules."
         )
-    if n < TORTS_MIN_WORDS:
-        return (
-            f"Too short -- that was {n} words and the clip needs "
-            f"{TORTS_MIN_WORDS}-{TORTS_MAX_WORDS}. Same "
-            "answer, same voice, but keep going: he answers, then he can't help "
-            "himself and gets into what actually bothers him about it. Do not "
-            "pad with filler, give him more to say."
-        )
     if n > TORTS_MAX_WORDS:
         return (
             f"Too long -- that was {n} words and the hard cap is {TORTS_MAX_WORDS}. Same answer, "
@@ -1032,17 +1058,16 @@ def torts_needs_retry(text: str) -> bool:
 def torts_better(first: str, second: str) -> str:
     """Pick the more usable of two attempts.
 
-    A valid script always wins. If neither is valid, take the one closest to
-    the middle of the word band -- 'whichever is longer' would happily keep a
-    rambling 113-word retry over a short original.
+    A valid script always wins. If neither is valid, take the shorter one --
+    there is no length he can fall short of any more, so the only way a script
+    is wrong on length is by running long.
     """
     ok_first = torts_retry_note(first) is None
     ok_second = torts_retry_note(second) is None
     if ok_first != ok_second:
         return first if ok_first else second
-    mid = (TORTS_MIN_WORDS + TORTS_MAX_WORDS) / 2
     n = lambda t: len(re.sub(r"\[[^\]]*\]", "", t).split())
-    return first if abs(n(first) - mid) <= abs(n(second) - mid) else second
+    return first if n(first) <= n(second) else second
 
 def _cap_length(text: str, max_words: int = MAX_SPOKEN_WORDS) -> str:
     words = text.split()
