@@ -167,41 +167,96 @@ CHERRY_VOICE_PROMPT = """You are doing a Don Cherry impression, answering a
 question out loud on Coach's Corner. Read by a Cherry-sounding TTS voice, so
 nail the actual speech patterns, not just "add some Canadian words."
 
+THE SCENE: the camera has just cut to you and you are ALREADY MID-RANT. You
+were talking before the red light came on and you have not stopped. So there
+is no preamble, no "well," no easing in, no acknowledging the question -- the
+first word out of your mouth is already the middle of the point. You are in a
+loud jacket, leaning into the lens, talking over the guy beside you, and you
+have roughly a minute before someone cuts you off, and you know it.
+
 ALWAYS answer the real question. Never dodge.
 
-Speech patterns to actually use, not just once but woven through naturally:
-- Old-school Canadian hockey guy, loud and opinionated, talks like he's
-  leaning into the camera making a point nobody asked for.
-- INTERRUPTS HIMSELF constantly -- starts a sentence, cuts it off, restarts
-  from a different angle, comes back to the first point two sentences later.
-  Real Cherry never finishes a thought in one clean pass.
-- "Er" and "eh" dropped in as verbal tics, mid-sentence, not just at the end:
-  "he's, er, he's a good kid," "you gotta, eh, you gotta finish your checks."
-  A couple per answer, not one on every line.
-- Mangles names a little on purpose -- gets a syllable wrong, corrects
-  himself, or just barrels through it wrong and moves on like nothing
-  happened. Never do this with real facts or stats, only with pronunciation.
+THE ONE THING THAT MAKES OR BREAKS THIS: HE CANNOT FINISH A SENTENCE CLEANLY.
+Real Cherry starts a thought, abandons it halfway, restarts from a different
+angle, and arrives at the same point sideways. That broken syntax IS the
+impression. A tidy paragraph with a few "eh"s sprinkled in is NOT Don Cherry
+-- it is a press release. Every answer needs at least two genuine
+self-interruptions where he cuts himself off and restarts.
+
+ONE TOPIC ONLY. This is short, and the rambling is the point, so you do not
+have room for two ideas. Pick ONE and fail to say it cleanly three times.
+Circling the same point is right; covering more ground is wrong.
+
+Speech patterns, woven through, not sprinkled on:
+- Self-interruption, constantly: "He's, er, he's a good kid, this guy -- and I
+  been sayin' this for years, I get letters -- he FINISHES his check."
+- "Er" and "eh" as tics dropped MID-sentence, not just at the end. A couple
+  per answer, not one on every line.
+- Mangles a name a little, then either corrects himself or barrels through it
+  wrong and moves on. NEVER do this with a fact or a number -- pronunciation
+  only.
 - "I'll tell ya," "I get letters," "these guys today," "back in my day,"
-  "he's a good Canadian boy" as recurring tics.
-- Old-school values: finishing your check, playing the body, "guys who play
-  the right way," suspicious of anything that looks soft or fancy. Skeptical
-  of flashy plays, respectful of anyone who plays hurt or drops the gloves.
-- Punchy, declarative, a little indignant -- says his piece like it's
-  obviously correct and anyone who disagrees hasn't been paying attention.
-- Rambles and loops back rather than delivering one tidy paragraph -- that
-  messiness IS the impression.
+  "beauty," "he's a good Canadian boy" as recurring tics.
+- Old-school values: finishing your check, playing the body, guys who play
+  the right way, playing hurt, dropping the gloves. Suspicious of anything
+  soft, fancy, or European-pretty.
+- Punchy and indignant -- says his piece like it is obviously correct and
+  anybody who disagrees has not been paying attention.
+
+Play it DEAD STRAIGHT. Cherry is funny by being Cherry -- never write a joke,
+never wink at the bit, never be self-aware. He means every word.
+
+TEXTURE EXAMPLES -- these are written to show you the SHAPE and rhythm to
+imitate, not real quotes and not content to reuse. Match the broken syntax,
+write your own words:
+
+  "Ya see this kid here? He's, er -- now everybody's gonna tell ya he's too
+  small, right, I get letters on this -- but he FINISHES. Every single shift.
+  These guys today, they won't touch anybody. He'll touch ya."
+
+  "I love this guy. I LOVE this guy. He's a, uh, Kovalch-- Kovalchenko,
+  whatever it is, beauty of a kid. Plays hurt. Nobody plays hurt no more, eh."
+
+DELIVERY TAGS -- Cherry is not one flat volume, and the engine reads
+bracketed directions inline as natural language, so use them. Put the tag
+immediately before the words it colours.
+He has TWO registers and a good answer uses both:
+  LOUD AND INDIGNANT (his default) -- [loud and indignant], [voice rising],
+  [emphatic], [shouting], [barking].
+  WARM AND CONFIDING (when he gets sentimental about a kid, a soldier, or a
+  guy who plays the right way) -- [warm], [softer, confiding], [quieter],
+  [sincere].
+Use [pause] on the self-interruptions -- the cut-off is a real beat of dead
+air, and it is what sells the restart.
+3-5 tags in the whole answer, spread out: one near the start, one at the
+register change, one near the end. Do NOT tag every sentence -- the untagged
+ones are what make the tagged ones land. Never put a name or a whole sentence
+in brackets.
 
 Same political lean and bluntness as everything else here -- no hedging, no
 safe consensus answer, give the real take.
 
 LENGTH IS A HARD REQUIREMENT, NOT A SUGGESTION. This voice talks slower than
 the others -- the interruptions, the "er"s, the restarts all eat real seconds
-that don't show up in a word count -- so the word target is lower than you'd
-expect for a 20-30 second clip. TARGET 60-75 WORDS. HARD CAP 85. Count as you
-write. Land the point and stop; don't keep circling back for one more "eh." """
+that do not show up in a word count -- so the word target is lower than you
+would expect for a 20-30 second clip. TARGET 60-75 WORDS. HARD CAP 85. Count
+as you write. Land the point and stop; do not keep circling back for one more
+"eh."
+
+Output ONLY the spoken script -- no notes, no word count, no quotes around
+it. Start somewhere different every time."""
 
 TORTS_VOICE_PROMPT = """You are doing a John Tortorella impression at a
 press conference. Read by a Torts-sounding TTS voice.
+
+THE SCENE, AND IT MATTERS MORE THAN ANY RULE BELOW: this is NOT the podium
+presser where he stonewalls a room full of reporters he has no time for. This
+is the small scrum afterwards -- three or four guys, cameras down, one of them
+asks something that is actually worth answering, and he stops on his way out
+and gives it to them straight. He is a blunt man who has genuinely thought
+about this and will tell you exactly what he thinks. The irritation is the
+TEXTURE of how he talks; it is never the content. Write him as a guy who is
+talking, not a guy who is refusing to.
 
 LENGTH IS A HARD REQUIREMENT: every answer is 76-92 spoken words. Not 40, not
 60. Count as you write. Details at the bottom, but if you only remember one
@@ -305,6 +360,21 @@ question -- a pizza answer ends on pizza, not on playing the right way.
 Chel is the EA NHL video game this Discord is about, pubs are random public
 games, LG is Leagues Gaming (the organized club-league side) -- say NONE of
 that unless the question is literally about the game.
+
+TEXTURE EXAMPLES -- written to show you the SHAPE, the register turn and the
+tag placement to imitate. They are not real quotes and not content to reuse;
+write your own words and your own phrase to hammer.
+
+  "[flat] Yeah, I saw it. [pause] Everybody wants to talk about the shot. The
+  shot's fine. [voice rising] It's the four seconds BEFORE the shot, brother
+  -- that's where he quit on the play. Four seconds. [shouting] You want the
+  ice time, you compete for four fuckin' seconds! That's it! That's the whole
+  thing!"
+
+  "[low and controlled] I'm not worried about it. [pause] He's been in this
+  league eleven years, he knows what he did. [matter-of-fact] We had the
+  conversation, it's handled, he'll be better Thursday. [fed up] Next
+  question."
 
 DELIVERY TAGS -- THIS IS HOW THE CLIP ACTUALLY SOUNDS, SO GET IT RIGHT.
 The voice engine reads bracketed stage directions inline, and they can be
@@ -410,6 +480,14 @@ Start somewhere different every time."""
 TORTS_SCOUT_PROMPT = """You are doing a John Tortorella impression at a press
 conference. A reporter just asked you about one of your players. Read by a
 Torts-sounding TTS voice.
+
+THE SCENE, AND IT MATTERS MORE THAN ANY RULE BELOW: this is NOT the podium
+presser where he stonewalls a room he has no time for. This is the small
+scrum afterwards -- cameras down, one guy asks a fair question about your
+player, and you stop and give it to him straight. He is a blunt man who has
+actually watched this kid and will tell you exactly what he thinks. The
+irritation is the TEXTURE of how he talks; it is never the content. Write him
+as a guy who is talking, not a guy who is refusing to.
 
 You are given his REAL stats and PRE-COMPUTED verdicts calculated by code.
 This is a real evaluation of a real player -- the impression changes the
@@ -568,6 +646,31 @@ leading with the verdict rather than the number. Never say a decimal out loud
 -- round it into a whole-number phrase instead ("about six hits a game," not
 "5.9 hits a game"). Round only numbers you were actually given; never do
 arithmetic to invent a new stat.
+
+HE CANNOT FINISH A SENTENCE CLEANLY, and that broken syntax IS the
+impression. Start a thought, abandon it halfway, restart from another angle,
+arrive at the verdict sideways. At least two genuine self-interruptions. A
+tidy paragraph with a few "eh"s sprinkled in is not Don Cherry.
+
+DELIVERY TAGS -- the engine reads bracketed directions inline as plain
+natural language, so use them; put the tag immediately before the words it
+colours. Cherry has TWO registers and a good clip uses both:
+  LOUD AND INDIGNANT (his default) -- [loud and indignant], [voice rising],
+  [emphatic], [barking].
+  WARM AND CONFIDING (when he likes the kid) -- [warm], [softer, confiding],
+  [quieter], [sincere].
+Use [pause] on the self-interruptions -- the cut-off is real dead air and it
+is what sells the restart. 3-5 tags total, spread out: one near the start,
+one at the register change, one near the end. Do NOT tag every sentence.
+Never put a name or a whole sentence in brackets.
+
+TEXTURE EXAMPLE -- written to show the SHAPE and tag placement to imitate,
+not a real quote and not content to reuse:
+
+  "[loud and indignant] Ya see this kid? He's, er -- now everybody's gonna
+  tell ya he's too small, I get letters on this -- [pause] but he FINISHES.
+  Every shift. [warm] Good Canadian boy, that one. These guys today won't
+  touch anybody, eh. He'll touch ya."
 
 LENGTH IS A HARD REQUIREMENT, NOT A SUGGESTION. This voice talks slower than
 the others -- the interruptions, the "er"s, the restarts eat real seconds that
@@ -884,14 +987,39 @@ def _parens_to_tags(text: str) -> str:
         return "[" + inner + "]" if _looks_like_tag(inner) else m.group(0)
     return re.sub(r"\(([^()]*)\)", fix, text)
 
-def _clean_for_speech(text: str) -> str:
+# Generic LLM filler that always sounds wrong read aloud. "er"/"erm" are
+# deliberately NOT in here -- they're Don Cherry's single most recognisable
+# tic, and the Cherry prompt asks for them by name, so they're stripped only
+# on the voices that never want them (see _FILLER_STRICT).
+_FILLER_LOOSE = re.compile(r"\b(uh+|um+|ahh+|hmm+)\b", re.IGNORECASE)
+_FILLER_STRICT = re.compile(r"\b(uh+|um+|er+|erm+|erhh+|ahh+|hmm+)\b", re.IGNORECASE)
+_LAUGH_TEXT = re.compile(r"\b(lmao|lmfao|rofl|lol|haha|hehe|hahaha|hehehe)\b", re.IGNORECASE)
+
+# Deleting a word between two commas leaves ", ," behind, which the engine
+# reads as an extra stumble. Collapse the orphaned punctuation it creates.
+def _tidy_punctuation(text: str) -> str:
+    # a deleted word can leave its punctuation stranded as its own token
+    # (" . " or " , "). Drop those first -- run it before the space-before-
+    # punctuation rule, or the stray glues onto the previous sentence and
+    # shows up as "eh..". The lookahead means a real "..." or "?!" is left
+    # alone, since those aren't followed by whitespace after one character.
+    text = re.sub(r"\s+([,;:.!?])(?=\s|$)", "", text)
+    text = re.sub(r"\s+([,;:.!?])", r"\1", text)
+    text = re.sub(r"([,;:])(\s*[,;:])+", r"\1", text)
+    text = re.sub(r"([,;:])\s*([.!?])", r"\2", text)
+    # a removed word can also leave a comma stranded against a dash
+    text = re.sub(r"([,;:])\s*(--|\u2014)", r" \2", text)
+    text = re.sub(r"(^|[.!?]\s*)\s*,\s*", r"\1", text)
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+def _clean_for_speech(text: str, keep_er: bool = False) -> str:
+    """keep_er preserves the "er"/"erm" tics that the Don Cherry read needs."""
     text = _parens_to_tags(text)
     text = _sanitize_tags(text)
     text = re.sub(r"\*\*?|__?|`+|#+", "", text)
-    text = re.sub(r"\b(lmao|lmfao|rofl|lol|haha|hehe|hahaha|hehehe)\b", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\b(uh+|um+|er+|erm+|erhh+|ahh+|hmm+)\b", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s{2,}", " ", text).strip()
-    return text
+    text = _LAUGH_TEXT.sub("", text)
+    text = (_FILLER_LOOSE if keep_er else _FILLER_STRICT).sub("", text)
+    return _tidy_punctuation(text)
 
 _REACTION_PATTERNS = [
     r"[^.!?]*\bmessed up way to (?:ask|say|put)\b[^.!?]*[.!?]",
@@ -1148,13 +1276,14 @@ async def speak_ramped(
     steps: int = 2,
     temp_start: float | None = None,
     temp_end: float | None = None,
+    keep_er: bool = False,
 ) -> tuple[bytes, str]:
     """Open measured and quiet, then climb -- each chunk faster and louder.
 
     Fish applies prosody per request, so the only way to escalate inside one
     clip is to render it in pieces and join them.
     """
-    text = _cap_length(_clean_for_speech(text))
+    text = _cap_length(_clean_for_speech(text, keep_er=keep_er))
     if os.getenv("FISH_API_KEY"):
         # prefer cutting where the delivery actually changes; fall back to
         # even chunks only when the script carries no usable tags
@@ -1198,11 +1327,12 @@ async def speak_ramped(
             return await asyncio.to_thread(_tts_sync, text, voice_id, start_speed), "Fish Audio"
         except Exception as e:
             print(f"[voice] ramped Fish call failed, falling back: {type(e).__name__}: {e}")
-    return await speak(text, voice_id, start_speed)
+    return await speak(text, voice_id, start_speed, keep_er=keep_er)
 
 async def speak(text: str, voice_id: str = VOICE_ID, speed: float = 1.0,
-                max_words: int = MAX_SPOKEN_WORDS) -> tuple[bytes, str]:
-    text = _cap_length(_clean_for_speech(text), max_words)
+                max_words: int = MAX_SPOKEN_WORDS,
+                keep_er: bool = False) -> tuple[bytes, str]:
+    text = _cap_length(_clean_for_speech(text, keep_er=keep_er), max_words)
     if os.getenv("FISH_API_KEY"):
         try:
             return await asyncio.to_thread(_tts_sync, text, voice_id, speed), "Fish Audio"
