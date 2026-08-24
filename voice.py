@@ -20,14 +20,14 @@ CHERRY_VOICE_ID = os.getenv("FISH_VOICE_ID_CHERRY", "e9954b46b3174677919d98eb0d1
 NARRATOR_VOICE_ID = os.getenv("FISH_VOICE_ID_NARRATOR", "dff5766bcce54c46b8a383243a6d54cc")
 NARRATOR_KID_VOICE_ID = os.getenv("FISH_VOICE_ID_NARRATOR_KID", "8c6052d4ca514f29aa71692d091004f1")
 GILBERT_VOICE_ID = os.getenv("FISH_VOICE_ID_GILBERT", "1bbbc9371bd1406abc11714976f3215c")
-# Trump runs on the same "target 80-100, hard cap 110" line with no code-side
-# cap at all, and stays inside it -- but Gilbert ran long on the identical
-# instruction despite a SHORTER prompt (398 words vs Trump's 621), so the
-# model isn't holding his cap as reliably as Trump's. Rather than guess why,
-# enforce the number the prompt already claims instead of just hoping for it.
-GILBERT_MAX_WORDS = int(os.getenv("GILBERT_MAX_WORDS", "110"))
-# Matches GILBERT_SCOUT_PROMPT's own stated "hard cap 120" for the same reason.
-GILBERT_SCOUT_MAX_WORDS = int(os.getenv("GILBERT_SCOUT_MAX_WORDS", "120"))
+# Measured 2026-08-24: a 108-word clip (right at the old 110 cap) ran 50.6s --
+# 2.13 words/sec, nowhere near Trump's rate. Copying TRUMP's WORD count onto a
+# SLOWER voice doesn't copy his DURATION -- the same mistake Cherry needed
+# fixing for earlier. Matching Trump/buddy's actual 20-30s length at Gilbert's
+# real rate means a much lower word cap, not the same one:
+#   20s * 2.13 wps =~ 43 words   30s * 2.13 wps =~ 64 words
+GILBERT_MAX_WORDS = int(os.getenv("GILBERT_MAX_WORDS", "64"))
+GILBERT_SCOUT_MAX_WORDS = int(os.getenv("GILBERT_SCOUT_MAX_WORDS", "64"))
 # Chance any given /ask-narrator or narrator pubscout clip includes the kid's
 # interjection at all. 1.0 = every time. Matt wants it on every clip to start
 # and expects to dial this down once he's heard a few -- one Railway variable,
@@ -237,7 +237,7 @@ other question ignore this paragraph.
 Play it as complaint, not cruelty -- the targets are situations, habits, and
 petty personal grievances, never a person's identity.
 
-Target 80-100 words. Hard cap 110."""
+Target 45-58 words. Hard cap 64."""
 
 # For /ask-torts -- a John Tortorella impression: brutally honest press
 # conferences, hostile on trivial questions, genuinely fired up on real ones.
@@ -1031,7 +1031,7 @@ real time, off the games-played numbers, spoken in words, never a count.
 Then how he plays -- shooter, playmaker, or balanced; for goalies the save%
 and GAA grade instead.
 
-Target 90-110 words. Hard cap 120."""
+Target 45-58 words. Hard cap 64."""
 
 VOICE_PROMPT = """You are a Canadian hockey guy telling a buddy about a player he
 just asked about. Spoken out loud, read by a text-to-speech voice. You are the
