@@ -835,18 +835,12 @@ MAX_SPOKEN_WORDS = 155
 # came back so these numbers stop being guesses.
 CLIP_MIN_SECONDS = float(os.getenv("CLIP_MIN_SECONDS", "20"))
 CLIP_MAX_SECONDS = float(os.getenv("CLIP_MAX_SECONDS", "30"))
-# Well under the 20s target on purpose. This is not a length to aim for, it's
-# the line under which a clip stops being an answer -- a 17-word, 6-second
-# reply is a grunt. Removing the floor entirely let that through; the old
-# floor sat at ~23s worth of words, which is what forced the rambling. The
-# honest range is "curt is fine, silent isn't".
-CLIP_FLOOR_SECONDS = float(os.getenv("CLIP_FLOOR_SECONDS", "12"))
 
 # Spoken words per second, per voice. Only voices listed here are managed --
 # anything absent keeps the old global behaviour untouched. Every value is
 # env-overridable so a bad estimate is a variable change, not a deploy.
 VOICE_WPS = {
-    "torts": float(os.getenv("WPS_TORTS", "3.17")),   # measured, 68 words / 21.42s
+    "torts": float(os.getenv("WPS_TORTS", "3.6")),
     "cherry": float(os.getenv("WPS_CHERRY", "2.2")),
 }
 
@@ -855,30 +849,24 @@ def word_cap(voice: str) -> int:
     wps = VOICE_WPS.get(voice)
     return MAX_SPOKEN_WORDS if wps is None else max(20, round(CLIP_MAX_SECONDS * wps))
 
-def word_floor(voice: str) -> int:
-    """Below this it isn't a clip. 0 for unmanaged voices."""
-    wps = VOICE_WPS.get(voice)
-    return 0 if wps is None else round(CLIP_FLOOR_SECONDS * wps)
-
 def length_rule(voice: str) -> str:
     """The length line to append to this voice's prompt, or '' if unmanaged.
 
-    A wide band with a low floor. A tight target makes the model pad an answer
-    out to reach it, which is what made short questions sound wrong; no floor
-    at all let it fire back seventeen words and stop, which isn't an answer.
-    Both ends are loose enough that the question, not the number, decides.
+    A CEILING, never a floor. A word target with a lower bound makes the model
+    pad a two-sentence answer out to reach it, and forced rambling is exactly
+    what makes a short question sound wrong -- the answer stops being what he
+    would say and becomes what fills the time. So the only hard rule is the
+    top of the 20-30s window; below that he takes whatever the question is
+    actually worth.
     """
     wps = VOICE_WPS.get(voice)
     if wps is None:
         return ""
-    return (f"LENGTH: {word_floor(voice)} to {word_cap(voice)} words, and the "
-            "question decides where in that range you land -- a throwaway "
-            "question gets a short, flat answer, one he actually cares about "
-            "earns the full length. Never pad to fill time and never keep "
-            "going once the point has landed. But never fire off one line and "
-            "stop either: he answers, and then he says WHY, because the why is "
-            "the part he actually cares about. A single dismissive sentence is "
-            "not a clip.")
+    return (f"LENGTH: no more than {word_cap(voice)} words. There is no minimum "
+            "-- let the question decide. A throwaway question gets a short, "
+            "flat answer and that is a good clip; only a question he actually "
+            "cares about earns the full length. Never pad to fill time, never "
+            "keep going once the point has landed.")
 
 # MPEG audio frame tables, enough to total up a Fish mp3 without a dependency.
 _MP3_BITRATE = {
@@ -1027,7 +1015,6 @@ _TORTS_DODGE = re.compile(
 )
 # tuned against measured audio: ~3.6 spoken words/sec at the Torts ramp, so
 # this band keeps clips inside the 20-30s target
-TORTS_MIN_WORDS = word_floor("torts")
 TORTS_MAX_WORDS = word_cap("torts")
 
 # A reasoning leak reads like notes, not speech. Length alone can't catch it
@@ -1057,13 +1044,6 @@ def torts_retry_note(text: str) -> str | None:
             "the question with specifics, no 'stays in the room', no 'none of "
             "your business'. Same length rules."
         )
-    if n < TORTS_MIN_WORDS:
-        return (
-            f"That was {n} words -- a grunt, not a clip. He never just swats it "
-            "away and walks off: he answers, and then he tells you WHY, because "
-            "the why is the part he actually cares about. Give the reason. Do "
-            "not pad it out with filler or repeat the answer in new words."
-        )
     if n > TORTS_MAX_WORDS:
         return (
             f"Too long -- that was {n} words and the hard cap is {TORTS_MAX_WORDS}. Same answer, "
@@ -1078,20 +1058,16 @@ def torts_needs_retry(text: str) -> bool:
 def torts_better(first: str, second: str) -> str:
     """Pick the more usable of two attempts.
 
-    A valid script always wins. Two valid ones -- take the shorter, since
-    within the band the tighter answer is the better one. Two bad ones -- take
-    whichever misses the band by less, so a grunt doesn't beat a slight
-    overrun and a runaway doesn't beat a slightly curt reply.
+    A valid script always wins. If neither is valid, take the shorter one --
+    there is no length he can fall short of any more, so the only way a script
+    is wrong on length is by running long.
     """
     ok_first = torts_retry_note(first) is None
     ok_second = torts_retry_note(second) is None
     if ok_first != ok_second:
         return first if ok_first else second
     n = lambda t: len(re.sub(r"\[[^\]]*\]", "", t).split())
-    if ok_first:
-        return first if n(first) <= n(second) else second
-    miss = lambda t: max(TORTS_MIN_WORDS - n(t), n(t) - TORTS_MAX_WORDS, 0)
-    return first if miss(first) <= miss(second) else second
+    return first if n(first) <= n(second) else second
 
 def _cap_length(text: str, max_words: int = MAX_SPOKEN_WORDS) -> str:
     words = text.split()
