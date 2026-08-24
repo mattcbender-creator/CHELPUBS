@@ -364,7 +364,9 @@ async def ask_gilbert(interaction: discord.Interaction, question: str):
         return
     body = answer or "Got nothing back. Try again."
     try:
-        audio, engine = await vc.speak(body, voice_id=vc.GILBERT_VOICE_ID)
+        audio, engine = await vc.speak(body, voice_id=vc.GILBERT_VOICE_ID,
+                                       max_words=vc.GILBERT_MAX_WORDS)
+        log_clip("gilbert", body, audio)
     except Exception as e:
         await interaction.followup.send(
             f"Voice shit the bed: `{type(e).__name__}: {e}`\n\n**Q:** {question}\n{body}"[:2000]
@@ -555,7 +557,7 @@ VOICES = {
     "trump": (lambda: vc.TRUMP_SCOUT_PROMPT, lambda: vc.TRUMP_VOICE_ID, False, vc.MAX_SPOKEN_WORDS, False),
     "torts": (lambda: vc.TORTS_SCOUT_PROMPT, lambda: vc.TORTS_VOICE_ID, True, vc.MAX_SPOKEN_WORDS, False),
     "cherry": (lambda: vc.CHERRY_SCOUT_PROMPT, lambda: vc.CHERRY_VOICE_ID, False, vc.MAX_SPOKEN_WORDS, True),
-    "gilbert": (lambda: vc.GILBERT_SCOUT_PROMPT, lambda: vc.GILBERT_VOICE_ID, False, vc.MAX_SPOKEN_WORDS, False),
+    "gilbert": (lambda: vc.GILBERT_SCOUT_PROMPT, lambda: vc.GILBERT_VOICE_ID, False, vc.GILBERT_SCOUT_MAX_WORDS, False),
 }
 
 

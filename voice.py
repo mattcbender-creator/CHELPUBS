@@ -20,6 +20,14 @@ CHERRY_VOICE_ID = os.getenv("FISH_VOICE_ID_CHERRY", "e9954b46b3174677919d98eb0d1
 NARRATOR_VOICE_ID = os.getenv("FISH_VOICE_ID_NARRATOR", "dff5766bcce54c46b8a383243a6d54cc")
 NARRATOR_KID_VOICE_ID = os.getenv("FISH_VOICE_ID_NARRATOR_KID", "8c6052d4ca514f29aa71692d091004f1")
 GILBERT_VOICE_ID = os.getenv("FISH_VOICE_ID_GILBERT", "1bbbc9371bd1406abc11714976f3215c")
+# Trump runs on the same "target 80-100, hard cap 110" line with no code-side
+# cap at all, and stays inside it -- but Gilbert ran long on the identical
+# instruction despite a SHORTER prompt (398 words vs Trump's 621), so the
+# model isn't holding his cap as reliably as Trump's. Rather than guess why,
+# enforce the number the prompt already claims instead of just hoping for it.
+GILBERT_MAX_WORDS = int(os.getenv("GILBERT_MAX_WORDS", "110"))
+# Matches GILBERT_SCOUT_PROMPT's own stated "hard cap 120" for the same reason.
+GILBERT_SCOUT_MAX_WORDS = int(os.getenv("GILBERT_SCOUT_MAX_WORDS", "120"))
 # Chance any given /ask-narrator or narrator pubscout clip includes the kid's
 # interjection at all. 1.0 = every time. Matt wants it on every clip to start
 # and expects to dial this down once he's heard a few -- one Railway variable,
