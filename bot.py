@@ -444,17 +444,31 @@ async def ask_narrator(interaction: discord.Interaction, question: str):
     # flip whether the kid shows up this time.
     with_kid = random.random() < vc.NARRATOR_KID_PROB
     prompt = vc.NARRATOR_VOICE_PROMPT if with_kid else vc.NARRATOR_SOLO_VOICE_PROMPT
+    msgs = [
+        {"role": "system", "content": prompt},
+        *([{"role": "system", "content": note}] if note else []),
+        {"role": "user", "content": question},
+    ]
     try:
-        resp = await call_llm(
-            messages=[
-                {"role": "system", "content": prompt},
-                *([{"role": "system", "content": note}] if note else []),
-                {"role": "user", "content": question},
-            ],
-            max_tokens=260,
-            temperature=0.8,
-        )
+        resp = await call_llm(messages=msgs, max_tokens=260, temperature=0.8)
         answer = vc.strip_language_reactions((resp.choices[0].message.content or "").strip())
+        # The model sometimes writes the kid's question and never comes back
+        # to answer it -- a blind re-roll tends to repeat the same mistake,
+        # so tell it exactly what broke and give it one more try.
+        if vc.narrator_needs_retry(answer, with_kid):
+            fix = msgs + [
+                {"role": "assistant", "content": answer},
+                {"role": "user", "content": vc.narrator_retry_note(with_kid)},
+            ]
+            resp = await call_llm(messages=fix, max_tokens=260, temperature=0.85)
+            retry = vc.strip_language_reactions((resp.choices[0].message.content or "").strip())
+            if not vc.narrator_needs_retry(retry, with_kid):
+                answer = retry
+            elif with_kid:
+                # Still broken -- never air a clip that stops on an unanswered
+                # interruption. Drop the kid and play the opening line alone.
+                turns = vc.parse_narrator_script(answer)
+                answer = f"NARRATOR: {turns[0][1]}" if turns else answer
     except Exception as e:
         await interaction.followup.send(f"OpenRouter shit the bed: `{type(e).__name__}: {e}`")
         return
@@ -581,11 +595,25 @@ async def pubscout(interaction: discord.Interaction, gamertag: str,
         try:
             with_kid = random.random() < vc.NARRATOR_KID_PROB
             prompt = vc.NARRATOR_SCOUT_PROMPT if with_kid else vc.NARRATOR_SCOUT_SOLO_PROMPT
-            resp = await call_llm(
-                messages=[{"role": "system", "content": prompt},
-                          {"role": "user", "content": block}],
-                max_tokens=260, temperature=0.9)
-            script = ea.enforce_grade_word((resp.choices[0].message.content or "").strip(), standout)
+            msgs = [{"role": "system", "content": prompt}, {"role": "user", "content": block}]
+            resp = await call_llm(messages=msgs, max_tokens=260, temperature=0.9)
+            raw = (resp.choices[0].message.content or "").strip()
+            # Same failure as /ask-narrator: the model sometimes writes the
+            # kid's question and never comes back to answer it. One retry
+            # with the specific correction, then a safe single-turn fallback.
+            if vc.narrator_needs_retry(raw, with_kid):
+                fix = msgs + [
+                    {"role": "assistant", "content": raw},
+                    {"role": "user", "content": vc.narrator_retry_note(with_kid)},
+                ]
+                resp = await call_llm(messages=fix, max_tokens=260, temperature=0.95)
+                retry = (resp.choices[0].message.content or "").strip()
+                if not vc.narrator_needs_retry(retry, with_kid):
+                    raw = retry
+                elif with_kid:
+                    turns = vc.parse_narrator_script(raw)
+                    raw = f"NARRATOR: {turns[0][1]}" if turns else raw
+            script = ea.enforce_grade_word(raw, standout)
             audio, _ = await vc.speak_narrator(script, max_words=vc.word_cap("narrator"))
             spoken_only = " ".join(ln for _, ln in vc.parse_narrator_script(script))
             log_clip("narrator", spoken_only, audio)

@@ -1549,6 +1549,31 @@ def parse_narrator_script(text: str) -> list[tuple[str, str]]:
     turns = [(spk, ln.strip()) for spk, ln in _NARRATOR_TURN.findall(text) if ln.strip()]
     return turns or [("NARRATOR", text.strip())]
 
+def narrator_needs_retry(text: str, with_kid: bool) -> bool:
+    """True if the script doesn't have the exact turn structure it was asked
+    for -- most commonly the model writing the kid's question and never
+    coming back with the closing NARRATOR line that answers it, which airs
+    as a clip that just stops on an unanswered interruption.
+    """
+    speakers = [s for s, _ in parse_narrator_script(text)]
+    want = ["NARRATOR", "KID", "NARRATOR"] if with_kid else ["NARRATOR"]
+    return speakers != want
+
+def narrator_retry_note(with_kid: bool) -> str:
+    """Correction sent back when the turn structure came out wrong."""
+    if with_kid:
+        return (
+            "Wrong format. You wrote the opening and the kid's question but "
+            "never came back to answer him -- a clip can't just stop on an "
+            "unanswered interruption. Write it again: exactly three lines, "
+            "NARRATOR then KID then a second NARRATOR line that actually "
+            "answers the kid and lands the real answer. Each line starts with "
+            "the speaker's name and a colon, nothing before the first line and "
+            "nothing after the last."
+        )
+    return ('Wrong format. Output ONLY one line, starting with "NARRATOR: " -- '
+            "no KID line, no other speaker, just the single narration.")
+
 async def speak_narrator(text: str, max_words: int = MAX_SPOKEN_WORDS,
                           keep_er: bool = False) -> tuple[bytes, str]:
     """Render a NARRATOR:/KID: script as one clip, each turn in its own voice.
