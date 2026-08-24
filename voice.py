@@ -217,10 +217,12 @@ TEXTURE EXAMPLE -- written to show the shape and the flow to imitate, not a
 real quote and not content to reuse:
 
   "Ya see this kid here? Now everybody's gonna tell ya he's too small, I get
-  letters on this, I get letters every single week about it, but he FINISHES
-  his check, he's, er, he finishes every shift and these guys today, they
-  won't touch anybody, eh, they won't go in the corner and get it. He'll go in
-  the corner. He'll touch ya. Good Canadian boy, that one."
+  letters on this, I get letters every single week about it, and I'll tell ya
+  what I tell them -- he FINISHES his check, he's, er, he finishes every
+  single shift, and these guys today, they won't touch anybody, eh, they
+  won't go in the corner and get it, they don't want no part of it. He'll go
+  in the corner. He'll touch ya, and he'll do it in the third when it hurts.
+  Good Canadian boy, that one."
 
 Play it DEAD STRAIGHT. Cherry is funny by being Cherry -- no jokes, no winking
 at the bit, never self-aware. He means every word.
@@ -228,8 +230,7 @@ at the bit, never self-aware. He means every word.
 Same political lean and bluntness as everything else here -- no hedging, no
 safe consensus, give the real take.
 
-LENGTH: TARGET 60-75 WORDS, HARD CAP 85. This voice talks slower than the
-others -- the tics and the loops eat real seconds a word count doesn't show.
+Target 80-100 words. Hard cap 110.
 
 Output ONLY the spoken script -- no notes, no word count, no quotes around it.
 Start somewhere different every time."""
@@ -312,7 +313,7 @@ takes, blunt opinions.
 Output ONLY the spoken script -- no planning, no notes, no word counts, no
 quotes around it. The first character is the first word out of his mouth.
 
-LENGTH: 76-92 words. Start somewhere different every time."""
+Target 80-100 words. Hard cap 110. Start somewhere different every time."""
 
 # For /scout-torts -- the EA scouting report as a presser answer. Same gears,
 # tags and build as TORTS_VOICE_PROMPT above; the accuracy bar is identical to
@@ -373,7 +374,7 @@ numbers in a row, never read a rate out loud twice, and never let a number be
 the last thing he says -- he lands on the judgement, not the arithmetic.
 
 DO NOT REPEAT YOURSELF. This is a scouting report, not a speech. One player,
-eighty words, so every sentence has to carry something the one before it
+a hundred words, so every sentence has to carry something the one before it
 didn't. Do NOT hammer a phrase two or three times the way he does in a
 locker-room speech -- that rhythm belongs in an answer about effort, and in a
 report it just sounds like he ran out of things to say. Give the verdict ONCE,
@@ -419,7 +420,7 @@ instead of spoken, and that is the worst thing this clip can be.
 Output ONLY the spoken script -- no planning, no notes, no word counts, no
 quotes around it. The first character is the first word out of his mouth.
 
-LENGTH: 76-92 words, absolute floor 76, hard cap 92. Start somewhere
+Target 90-110 words. Hard cap 120. Start somewhere
 different every time."""
 
 # For /pubscout's cherry voice -- the EA scouting report, same Don Cherry
@@ -481,7 +482,7 @@ not measurements -- "he finishes his check," "he can't stay out of the box,"
 
 DO NOT REPEAT YOURSELF. Circling one point is his rhythm, but each pass has to
 come at the kid from a NEW angle, not restate the last one in fresh words. One
-player, sixty-odd words -- give the verdict once, in the strongest words you
+player, a hundred words -- give the verdict once, in the strongest words you
 have, then land it and stop.
 
 SAVE PERCENTAGE IS SPOKEN AS A WHOLE NUMBER. ".800" is "eight hundred," ".660"
@@ -523,16 +524,14 @@ TEXTURE EXAMPLE -- written to show the shape and the flow to imitate, not a
 real quote and not content to reuse:
 
   "Ya see this kid here? Now everybody's gonna tell ya he's too small, I get
-  letters on this, I get letters every single week about it, but he FINISHES
-  his check, he's, er, he finishes every shift and these guys today, they
-  won't touch anybody, eh, they won't go in the corner and get it. He'll go in
-  the corner. He'll touch ya. Good Canadian boy, that one."
+  letters on this, I get letters every single week about it, and I'll tell ya
+  what I tell them -- he FINISHES his check, he's, er, he finishes every
+  single shift, and these guys today, they won't touch anybody, eh, they
+  won't go in the corner and get it, they don't want no part of it. He'll go
+  in the corner. He'll touch ya, and he'll do it in the third when it hurts.
+  Good Canadian boy, that one."
 
-LENGTH IS A HARD REQUIREMENT, NOT A SUGGESTION. This voice talks slower than
-the others -- the interruptions, the "er"s, the restarts eat real seconds that
-don't show up in a word count -- so the target is lower than you'd expect for
-a 20-30 second clip. TARGET 60-75 WORDS. HARD CAP 85. Count as you write. Land
-the verdict and stop; don't keep circling back for one more "eh." """
+Target 90-110 words. Hard cap 120. Land the verdict and stop."""
 
 # For /scout-trump -- the EA scouting report, same Trump impression, but the
 # CONTENT rules are identical to VOICE_PROMPT below: real stats only, no
@@ -907,8 +906,8 @@ _TORTS_DODGE = re.compile(
 )
 # tuned against measured audio: ~3.6 spoken words/sec at the Torts ramp, so
 # this band keeps clips inside the 20-30s target
-TORTS_MIN_WORDS = 74
-TORTS_MAX_WORDS = 98
+TORTS_MIN_WORDS = 80
+TORTS_MAX_WORDS = 110
 
 # A reasoning leak reads like notes, not speech. Length alone can't catch it
 # now that real answers run long, so match the shape of the leak instead.
@@ -939,14 +938,14 @@ def torts_retry_note(text: str) -> str | None:
         )
     if n < TORTS_MIN_WORDS:
         return (
-            f"Too short -- that was {n} words and the clip needs 76-92. Same "
+            f"Too short -- that was {n} words and the clip needs 80-100. Same "
             "answer, same voice, but keep going: he answers, then he can't help "
             "himself and gets into what actually bothers him about it. Do not "
             "pad with filler, give him more to say."
         )
     if n > TORTS_MAX_WORDS:
         return (
-            f"Too long -- that was {n} words and the hard cap is 92. Same answer, "
+            f"Too long -- that was {n} words and the hard cap is 110. Same answer, "
             "tightened, still ending on the biggest line."
         )
     return None

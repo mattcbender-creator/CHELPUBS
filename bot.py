@@ -345,7 +345,7 @@ async def ask_cherry(interaction: discord.Interaction, question: str):
     body = answer or "Got nothing back. Try again."
     try:
         audio, engine = await vc.speak(body, voice_id=vc.CHERRY_VOICE_ID,
-                                       max_words=85, keep_er=True)
+                                       keep_er=True)
     except Exception as e:
         await interaction.followup.send(
             f"Voice shit the bed: `{type(e).__name__}: {e}`\n\n**Q:** {question}\n{body}"[:2000]
@@ -427,18 +427,19 @@ invent stats, never do arithmetic, and never comment on passing, positioning,
 hockey IQ, chemistry or attitude -- you have no data for those. Frame him
 against the position he actually plays most."""
 
-# Fourth element is the enforced word ceiling passed to vc.speak(). Cherry
-# talks slower than the others -- the interruptions, "er"s and restarts eat
-# real seconds a word count doesn't show -- so the same MAX_SPOKEN_WORDS that
-# gives buddy/trump a 20-30s clip ran Cherry to ~50s. The prompt now targets
-# 60-75 words on its own, this is the hard backstop if it ignores that.
+# Fourth element is the enforced word ceiling passed to vc.speak(). Every voice
+# now runs on Trump's numbers -- the prompts target 80-100 with a 110 cap, and
+# MAX_SPOKEN_WORDS is the same far-off backstop for all four. Cherry used to be
+# clamped to 85 here because his old prompt built clips out of interruptions
+# that ate real seconds; that prompt is gone, and a cap tighter than the target
+# would truncate him mid-sentence.
 # Fifth is keep_er: the speech cleaner strips "er" as filler for every other
 # voice, but it's Cherry's most recognisable tic and his prompt asks for it.
 VOICES = {
     "buddy": (lambda: vc.VOICE_PROMPT, lambda: vc.VOICE_ID, False, vc.MAX_SPOKEN_WORDS, False),
     "trump": (lambda: vc.TRUMP_SCOUT_PROMPT, lambda: vc.TRUMP_VOICE_ID, False, vc.MAX_SPOKEN_WORDS, False),
     "torts": (lambda: vc.TORTS_SCOUT_PROMPT, lambda: vc.TORTS_VOICE_ID, True, vc.MAX_SPOKEN_WORDS, False),
-    "cherry": (lambda: vc.CHERRY_SCOUT_PROMPT, lambda: vc.CHERRY_VOICE_ID, False, 85, True),
+    "cherry": (lambda: vc.CHERRY_SCOUT_PROMPT, lambda: vc.CHERRY_VOICE_ID, False, vc.MAX_SPOKEN_WORDS, True),
 }
 
 
