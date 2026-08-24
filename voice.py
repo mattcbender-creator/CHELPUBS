@@ -32,7 +32,16 @@ TORTS_EMPHASIS = float(os.getenv("TORTS_EMPHASIS", "1.05"))
 # just mutes the loud half. 1.0 = no easing at all.
 TORTS_TURN = float(os.getenv("TORTS_TURN", "0.91"))
 # more chunks = smaller step between each = smoother climb
-TORTS_RAMP_STEPS = int(os.getenv("TORTS_RAMP_STEPS", "5"))
+TORTS_RAMP_STEPS = int(os.getenv("TORTS_RAMP_STEPS", "3"))
+# Ceiling on how many pieces one clip is rendered in. Every extra piece is a
+# separate Fish request, so it's a seam in the audio and a chunk of script the
+# model can't carry a phrase across. A prompt-compliant "two registers, one
+# turn" script wants 2; this is the backstop when it writes more.
+TORTS_RAMP_MAX_SEGS = int(os.getenv("TORTS_RAMP_MAX_SEGS", "4"))
+# Set TORTS_RAMP=0 to render Torts in a single flat call instead, for an A/B
+# against the ramp. S2.1 honours the delivery tags inside one request on its
+# own, so flat is not the same as lifeless -- it just loses the escalation.
+TORTS_RAMP = os.getenv("TORTS_RAMP", "1").strip().lower() not in ("0", "off", "false", "no")
 # Fish's own temperature (0-1, default 0.7) -- how much the delivery varies.
 # Climbs with the rest of the ramp: controlled at the top of the clip, loose
 # and unpredictable once he's worked up. Above ~0.95 it starts to garble.
@@ -1173,8 +1182,14 @@ _LOUD_TAGS = re.compile(
 _MID_TAGS = re.compile(
     r"emphasis|intense|firm|urgent|building|picking up|fed up|hard|matter-?of-?fact|blunt", re.I
 )
+# "pause" is deliberately NOT in here. It's a PACING mark, not an intensity
+# one, and it's the tag the prompts ask for most -- scoring it as quiet made
+# every mid-section [pause] cut a new segment AND drop the gain to near zero,
+# so a line like "[shouting] Every shift! [pause] Every single shift!" had its
+# loudest half rendered at 0.12. Left unscored it produces no cut, and the
+# text after it holds the register it was already in.
 _QUIET_TAGS = re.compile(
-    r"low|controlled|quiet|flat|deadpan|soft|whisper|slow|deliberate|cold|sigh|tired|pause", re.I
+    r"low|controlled|quiet|flat|deadpan|soft|whisper|slow|deliberate|cold|sigh|tired", re.I
 )
 
 def _tag_bucket(inner: str) -> float | None:
@@ -1188,7 +1203,7 @@ def _tag_bucket(inner: str) -> float | None:
         return 0.12
     return None
 
-def _split_by_intensity(text: str, min_words: int = 2, max_segs: int = 6):
+def _split_by_intensity(text: str, min_words: int = 2, max_segs: int | None = None):
     """Cut the script exactly where its delivery changes.
 
     Splitting at even intervals meant one chunk could hold two sentences with
@@ -1196,6 +1211,8 @@ def _split_by_intensity(text: str, min_words: int = 2, max_segs: int = 6):
     quiet line sharing a chunk with a shout came out shouted. Cutting at the
     tag boundaries keeps every segment at a single, correct intensity.
     """
+    if max_segs is None:
+        max_segs = TORTS_RAMP_MAX_SEGS
     marks = []
     for m in re.finditer(r"\[([^\]]*)\]", text):
         b = _tag_bucket(m.group(1))
@@ -1284,6 +1301,11 @@ async def speak_ramped(
     clip is to render it in pieces and join them.
     """
     text = _cap_length(_clean_for_speech(text, keep_er=keep_er))
+    if not TORTS_RAMP:
+        # A/B path: one request at the midpoint of the ramp and no gain, so
+        # the only thing that changes versus the ramp is the escalation.
+        return await speak(text, voice_id,
+                           round((start_speed + end_speed) / 2, 3), keep_er=keep_er)
     if os.getenv("FISH_API_KEY"):
         # prefer cutting where the delivery actually changes; fall back to
         # even chunks only when the script carries no usable tags
