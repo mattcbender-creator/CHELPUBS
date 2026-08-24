@@ -275,23 +275,25 @@ colon, nothing before the first one and nothing after the last one:
 NARRATOR: <one continuous take of narration -- no stage directions, no
 brackets, no notes on delivery, the words alone carry the pomp>
 KID: <one short, real question>
-NARRATOR: <continues, folding the answer to the kid's question back into the
-lecture, then lands the actual answer to the user's question>
+NARRATOR: <folds the answer to the kid's question back into the lecture>
 
-Exactly one NARRATOR line, then exactly one KID line, then exactly one more
-NARRATOR line -- three lines total, in that order, every time. Never write a
+The kid may interrupt ONCE or TWICE -- never more, never zero. Use two only
+when the answer genuinely has two distinct beats worth separate questions;
+most of the time, one is right. Every KID line is followed by another
+NARRATOR line -- the clip must ALWAYS end on a NARRATOR line, landing the
+actual answer to the user's question, never on the kid. Never write a
 NARRATOR line and a KID line back to back without the colon-and-name prefix;
 that prefix is how the words get routed to the right voice, so a missing one
 breaks the whole clip.
 
-Do NOT write this as one smooth narration with the kid painted in -- the KID
-line is its own turn, spoken by a different voice, and the second NARRATOR
-line has to genuinely acknowledge the interruption happened, not just
+Do NOT write this as one smooth narration with the kid painted in -- each KID
+line is its own turn, spoken by a different voice, and the NARRATOR line
+after it has to genuinely acknowledge the interruption happened, not just
 continue as if it hadn't.
 
-LENGTH: the two NARRATOR lines together run 70-100 words. The KID line is
-short -- 4-12 words, one real question, never a speech. Do not pad either
-role to hit a number; a kid who talks like a essay is the wrong bit."""
+Each KID line is short -- 4-12 words, one real question, never a speech. Do
+not pad the narrator's lines to hit a number either; say what's worth saying
+and stop."""
 
 # For /ask-narrator when NARRATOR_KID_PROB rolls against the kid appearing --
 # same character, but he finishes the thought uninterrupted. Only the FORMAT
@@ -319,9 +321,7 @@ WRITE IT AS ONE CONTINUOUS TAKE. No stage directions, no brackets, no notes
 on delivery -- the words alone carry the pomp.
 
 Output ONLY the spoken narration, prefixed with "NARRATOR: " and nothing
-else -- no other speaker, no extra lines.
-
-LENGTH: 80-110 words."""
+else -- no other speaker, no extra lines."""
 
 TORTS_VOICE_PROMPT = """You are doing a John Tortorella impression, answering
 a question out loud at a post-game press conference. Read by a Torts-sounding
@@ -485,14 +485,14 @@ nothing after the last:
 
 NARRATOR: <presents the player -- who he is, where he plays, how he plays>
 KID: <one short, real question about what was just said>
-NARRATOR: <answers the kid, lands the actual verdict on the player>
+NARRATOR: <acknowledges the question, continues toward the verdict>
 
-Exactly one NARRATOR line, one KID line, one more NARRATOR line -- three
-lines, that order, every time. The second NARRATOR line must genuinely
-acknowledge the interruption, not just continue as if it hadn't happened.
-
-LENGTH: the two NARRATOR lines together run 80-110 words. The KID line is
-4-12 words."""
+The kid may interrupt ONCE or TWICE -- never more, never zero. Use two only
+when there's genuinely a second thing worth a kid's question (the position
+AND the verdict, say); most of the time, one is right. Every KID line is
+followed by another NARRATOR line -- the clip must ALWAYS end on a NARRATOR
+line landing the actual verdict, never on the kid. Each KID line is 4-12
+words, one real question."""
 
 # For when NARRATOR_KID_PROB rolls against the kid appearing -- same
 # character, uninterrupted. Only the FORMAT section differs from
@@ -532,9 +532,7 @@ DO NOT SUGARCOAT A BAD GRADE. The grandeur has to track the real tier.
 
 WRITE IT AS ONE CONTINUOUS TAKE. No stage directions, no brackets.
 
-Output ONLY the narration, prefixed with "NARRATOR: " and nothing else.
-
-LENGTH: 90-120 words."""
+Output ONLY the narration, prefixed with "NARRATOR: " and nothing else."""
 
 TORTS_SCOUT_PROMPT = """You are doing a John Tortorella impression at a press
 conference. A reporter just asked you about one of your players. Read by a
@@ -1042,19 +1040,58 @@ VOICE_WPS = {
     # prompt, which read far slower; under it the 66-word cap locked Cherry
     # out of the 20-30s window entirely (~16s ceiling).
     "cherry": float(os.getenv("WPS_CHERRY", "4.0")),
-    # Unmeasured -- no narrator clip has been logged yet. This entry doesn't
-    # drive his prompt (his length lives as fixed word counts in the prompt
-    # text itself, since the clip mixes two speakers at possibly different
-    # rates and the single-voice length_rule() math doesn't fit that cleanly)
-    # -- it exists only so log_clip() reports his real rate once clips start
-    # coming in, and so word_cap() has a sane truncation backstop meanwhile.
-    "narrator": float(os.getenv("WPS_NARRATOR", "3.0")),
 }
 
 def word_cap(voice: str) -> int:
     """Word ceiling that keeps this voice inside CLIP_MAX_SECONDS."""
     wps = VOICE_WPS.get(voice)
     return MAX_SPOKEN_WORDS if wps is None else max(20, round(CLIP_MAX_SECONDS * wps))
+
+# ------------------------------------------------------------ narrator/kid
+# The narrator clip mixes two speakers at two different rates, so it can't
+# use word_cap()/length_rule() above -- those assume one voice's pace budgets
+# the whole clip. NARRATOR is informed by the one real clip logged so far
+# (86 words / 33.65s, ~90% narrator content by word count, so the blended
+# 2.56 wps it measured is mostly HIS rate) -- still one data point, but a
+# meaningfully better start than a blind guess. KID is unmeasured; no
+# isolated kid line has been logged yet.
+WPS_NARRATOR = float(os.getenv("WPS_NARRATOR", "2.6"))
+WPS_KID = float(os.getenv("WPS_KID", "3.3"))
+# How many times the kid may interrupt in one clip. Letting the model reach
+# for a second interruption when an answer has two distinct beats adds
+# variety; the prompt still defaults to one most of the time.
+NARRATOR_KID_MAX_TURNS = int(os.getenv("NARRATOR_KID_MAX_TURNS", "2"))
+NARRATOR_KID_LINE_MAX_WORDS = int(os.getenv("NARRATOR_KID_LINE_MAX_WORDS", "12"))
+
+def narrator_word_cap(with_kid: bool = True) -> int:
+    """Hard ceiling on TOTAL spoken words across every turn in the clip.
+
+    Kid interjections are short and bounded -- at most NARRATOR_KID_MAX_TURNS
+    lines of at most NARRATOR_KID_LINE_MAX_WORDS each -- so budgeting for
+    that worst case up front keeps the whole clip's duration under
+    CLIP_MAX_SECONDS whether the model uses one interruption, two, or (solo
+    mode) none at all.
+    """
+    if not with_kid:
+        return round(CLIP_MAX_SECONDS * WPS_NARRATOR)
+    kid_words = NARRATOR_KID_MAX_TURNS * NARRATOR_KID_LINE_MAX_WORDS
+    narrator_seconds = max(1.0, CLIP_MAX_SECONDS - kid_words / WPS_KID)
+    return round(narrator_seconds * WPS_NARRATOR) + kid_words
+
+def narrator_length_rule(with_kid: bool = True) -> str:
+    """Length line appended to the narrator prompts at call time -- keeps the
+    instruction and the enforced cap from drifting apart, same reasoning as
+    length_rule() for the other voices.
+    """
+    cap = narrator_word_cap(with_kid)
+    lo = round(cap * CLIP_MIN_SECONDS / CLIP_MAX_SECONDS)
+    if not with_kid:
+        return f"LENGTH: {lo}-{cap} words total."
+    return (f"LENGTH: the WHOLE clip -- every NARRATOR line and every KID "
+            f"line, added together -- must total {lo}-{cap} words. That is "
+            f"the total, not the length of each line. If you use two kid "
+            f"interruptions instead of one, keep both narrator passages a "
+            f"little shorter so the total still fits.")
 
 def word_floor(voice: str) -> int:
     """Below this it isn't an answer. 0 for unmanaged voices."""
@@ -1550,25 +1587,33 @@ def parse_narrator_script(text: str) -> list[tuple[str, str]]:
     return turns or [("NARRATOR", text.strip())]
 
 def narrator_needs_retry(text: str, with_kid: bool) -> bool:
-    """True if the script doesn't have the exact turn structure it was asked
-    for -- most commonly the model writing the kid's question and never
-    coming back with the closing NARRATOR line that answers it, which airs
-    as a clip that just stops on an unanswered interruption.
+    """True if the script doesn't have a valid turn structure.
+
+    With the kid: NARRATOR/KID must alternate, 1 or 2 interruptions, and it
+    must always end on a NARRATOR line -- so exactly 3 or 5 turns. The most
+    common miss is the model writing the kid's question and never coming
+    back to answer it, which airs as a clip that just stops mid-conversation.
+    Solo: must be exactly one NARRATOR turn.
     """
     speakers = [s for s, _ in parse_narrator_script(text)]
-    want = ["NARRATOR", "KID", "NARRATOR"] if with_kid else ["NARRATOR"]
-    return speakers != want
+    if not with_kid:
+        return speakers != ["NARRATOR"]
+    one = ["NARRATOR", "KID", "NARRATOR"]
+    two = one + ["KID", "NARRATOR"]
+    return speakers != one and speakers != two
 
 def narrator_retry_note(with_kid: bool) -> str:
     """Correction sent back when the turn structure came out wrong."""
     if with_kid:
         return (
-            "Wrong format. You wrote the opening and the kid's question but "
-            "never came back to answer him -- a clip can't just stop on an "
-            "unanswered interruption. Write it again: exactly three lines, "
-            "NARRATOR then KID then a second NARRATOR line that actually "
-            "answers the kid and lands the real answer. Each line starts with "
-            "the speaker's name and a colon, nothing before the first line and "
+            "Wrong format. Every KID line must be followed by another "
+            "NARRATOR line -- the clip can never end on the kid, and it can "
+            "never just stop after his question with no answer. Write it "
+            "again: NARRATOR, then KID, then NARRATOR -- and if the answer "
+            "genuinely has a second beat worth a second question, KID then "
+            "NARRATOR again after that. But it must always land on a "
+            "NARRATOR line at the very end. Each line starts with the "
+            "speaker's name and a colon, nothing before the first line and "
             "nothing after the last."
         )
     return ('Wrong format. Output ONLY one line, starting with "NARRATOR: " -- '
