@@ -70,17 +70,24 @@ TORTS_FLAT_SPEED = float(os.getenv("TORTS_FLAT_SPEED", "1.0"))
 TORTS_TTS_TEMP_START = float(os.getenv("TORTS_TTS_TEMP_START", "0.80"))
 TORTS_TTS_TEMP_END = float(os.getenv("TORTS_TTS_TEMP_END", "0.95"))
 TTS_MODEL = os.getenv("FISH_MODEL", "s2.1-pro-free")
-# Was 90s, and _tts_sync can call Fish TWICE in a row (a tuned request that
-# gets rejected retries plain) -- so a single call could block for a full
-# 180s. Production logs showed real calls sitting at the old 90s ceiling
-# before giving up, which reads to a Discord user as the bot being frozen.
-FISH_TIMEOUT_SECONDS = float(os.getenv("FISH_TIMEOUT_SECONDS", "25"))
+# 25s turned out too tight. Trump is the longest render in the bot -- his
+# script is uncapped (up to MAX_SPOKEN_WORDS) where every other voice is
+# capped short -- so a healthy-but-slow Trump render can legitimately take
+# 30-40s, and a 25s ceiling killed exactly those. Back up to 45s: still half
+# the original 90s (which, doubled by the retry-plain path, could freeze a
+# user for 180s), but with real room for a long render to finish. Dead
+# connections that return nothing still fail fast well inside this and get a
+# second shot from FISH_ATTEMPTS, so a true outage still surfaces quickly.
+FISH_TIMEOUT_SECONDS = float(os.getenv("FISH_TIMEOUT_SECONDS", "45"))
 # Total network attempts per request. Tonight's live failures showed Fish
 # flapping -- one call streamed 255KB and still stalled, the next got 0 bytes
 # in 25s, and the clips in between succeeded fine. Against a flaky service a
 # FRESH request usually lands on a healthy path, so retrying beats waiting
 # longer on the stuck one.
 FISH_ATTEMPTS = max(1, int(os.getenv("FISH_ATTEMPTS", "2")))
+# Retries use a shorter deadline than the first attempt -- see _post(). A
+# second stalled connection isn't worth the full generous wait.
+FISH_RETRY_TIMEOUT = float(os.getenv("FISH_RETRY_TIMEOUT", "15"))
 
 ASK_VOICE_PROMPT = """You are a Canadian hockey bro answering a question out loud for
 text-to-speech. Talk like a real guy in the room -- casual, direct, profanity is
@@ -1155,7 +1162,7 @@ def _tts_sync(
     if temperature is not None:
         payload["temperature"] = temperature
 
-    def _post_once(body):
+    def _post_once(body, timeout):
         return requests.post(
             API,
             headers={
@@ -1165,17 +1172,25 @@ def _tts_sync(
             },
             json=body,
             impersonate="chrome",
-            timeout=FISH_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
 
     def _post(body):
         # Retries NETWORK failures (timeout, connection reset) only. An HTTP
         # error status returns normally and is handled below -- retrying a
         # 4xx would just repeat it.
+        # Asymmetric timeouts: the FIRST attempt is generous (FISH_TIMEOUT_
+        # SECONDS) so a legitimately slow render -- Trump is the longest one
+        # in the bot -- has room to finish. Every RETRY is short (FISH_RETRY_
+        # TIMEOUT): if the first attempt already failed, the likely cause is a
+        # stalled/dead connection, and a fresh request either lands fast or
+        # isn't worth waiting on -- so a real outage surfaces quickly instead
+        # of making the user sit through the full generous timeout twice.
         last = None
         for attempt in range(FISH_ATTEMPTS):
+            timeout = FISH_TIMEOUT_SECONDS if attempt == 0 else FISH_RETRY_TIMEOUT
             try:
-                return _post_once(body)
+                return _post_once(body, timeout)
             except Exception as e:
                 last = e
                 if attempt + 1 < FISH_ATTEMPTS:
