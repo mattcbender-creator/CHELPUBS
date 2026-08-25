@@ -70,6 +70,11 @@ TORTS_FLAT_SPEED = float(os.getenv("TORTS_FLAT_SPEED", "1.0"))
 TORTS_TTS_TEMP_START = float(os.getenv("TORTS_TTS_TEMP_START", "0.80"))
 TORTS_TTS_TEMP_END = float(os.getenv("TORTS_TTS_TEMP_END", "0.95"))
 TTS_MODEL = os.getenv("FISH_MODEL", "s2.1-pro-free")
+# Was 90s, and _tts_sync can call Fish TWICE in a row (a tuned request that
+# gets rejected retries plain) -- so a single call could block for a full
+# 180s. Production logs showed real calls sitting at the old 90s ceiling
+# before giving up, which reads to a Discord user as the bot being frozen.
+FISH_TIMEOUT_SECONDS = float(os.getenv("FISH_TIMEOUT_SECONDS", "25"))
 
 ASK_VOICE_PROMPT = """You are a Canadian hockey bro answering a question out loud for
 text-to-speech. Talk like a real guy in the room -- casual, direct, profanity is
@@ -1154,7 +1159,7 @@ def _tts_sync(
             },
             json=body,
             impersonate="chrome",
-            timeout=90,
+            timeout=FISH_TIMEOUT_SECONDS,
         )
 
     r = _post(payload)
@@ -1730,15 +1735,16 @@ async def speak(text: str, voice_id: str = VOICE_ID, speed: float = 1.0,
                 keep_er: bool = False) -> tuple[bytes, str]:
     text = _cap_length(_clean_for_speech(text, keep_er=keep_er), max_words)
     if os.getenv("FISH_API_KEY"):
-        try:
-            return await asyncio.to_thread(_tts_sync, text, voice_id, speed), "Fish Audio"
-        except Exception as e:
-            print(f"[voice] Fish Audio failed, falling back to edge-tts: {type(e).__name__}: {e}")
-    # edge-tts doesn't understand Fish delivery tags -- it would read them out
-    # loud as words, so strip any bracketed direction on the fallback path.
+        # A Fish failure is never silently swapped for a flat, wrong-sounding
+        # voice -- the impression IS the bit, and a Trump script read by a
+        # generic Canadian TTS voice is worse than no clip at all. Let it
+        # raise; every caller already catches this and tells the user voice
+        # isn't available right now instead of handing them the wrong voice.
+        return await asyncio.to_thread(_tts_sync, text, voice_id, speed), "Fish Audio"
+    # No Fish key configured at all -- local/dev, no real voice was ever in
+    # play to fall back FROM, so edge-tts is fine for testing.
     text = re.sub(r"\s*\[[^\]]*\]\s*", " ", text)
     text = re.sub(r"\s{2,}", " ", text).strip()
-    # carry the slower Torts read across to the fallback voice too
     rate = f"{round((speed - 1.0) * 100):+d}%"
     return await _edge_sync(text, rate), f"edge-tts ({EDGE_VOICE})"
 
