@@ -70,24 +70,6 @@ TORTS_FLAT_SPEED = float(os.getenv("TORTS_FLAT_SPEED", "1.0"))
 TORTS_TTS_TEMP_START = float(os.getenv("TORTS_TTS_TEMP_START", "0.80"))
 TORTS_TTS_TEMP_END = float(os.getenv("TORTS_TTS_TEMP_END", "0.95"))
 TTS_MODEL = os.getenv("FISH_MODEL", "s2.1-pro-free")
-# 25s turned out too tight. Trump is the longest render in the bot -- his
-# script is uncapped (up to MAX_SPOKEN_WORDS) where every other voice is
-# capped short -- so a healthy-but-slow Trump render can legitimately take
-# 30-40s, and a 25s ceiling killed exactly those. Back up to 45s: still half
-# the original 90s (which, doubled by the retry-plain path, could freeze a
-# user for 180s), but with real room for a long render to finish. Dead
-# connections that return nothing still fail fast well inside this and get a
-# second shot from FISH_ATTEMPTS, so a true outage still surfaces quickly.
-FISH_TIMEOUT_SECONDS = float(os.getenv("FISH_TIMEOUT_SECONDS", "45"))
-# Total network attempts per request. Tonight's live failures showed Fish
-# flapping -- one call streamed 255KB and still stalled, the next got 0 bytes
-# in 25s, and the clips in between succeeded fine. Against a flaky service a
-# FRESH request usually lands on a healthy path, so retrying beats waiting
-# longer on the stuck one.
-FISH_ATTEMPTS = max(1, int(os.getenv("FISH_ATTEMPTS", "2")))
-# Retries use a shorter deadline than the first attempt -- see _post(). A
-# second stalled connection isn't worth the full generous wait.
-FISH_RETRY_TIMEOUT = float(os.getenv("FISH_RETRY_TIMEOUT", "15"))
 
 ASK_VOICE_PROMPT = """You are a Canadian hockey bro answering a question out loud for
 text-to-speech. Talk like a real guy in the room -- casual, direct, profanity is
@@ -1162,7 +1144,7 @@ def _tts_sync(
     if temperature is not None:
         payload["temperature"] = temperature
 
-    def _post_once(body, timeout):
+    def _post(body):
         return requests.post(
             API,
             headers={
@@ -1172,31 +1154,8 @@ def _tts_sync(
             },
             json=body,
             impersonate="chrome",
-            timeout=timeout,
+            timeout=90,
         )
-
-    def _post(body):
-        # Retries NETWORK failures (timeout, connection reset) only. An HTTP
-        # error status returns normally and is handled below -- retrying a
-        # 4xx would just repeat it.
-        # Asymmetric timeouts: the FIRST attempt is generous (FISH_TIMEOUT_
-        # SECONDS) so a legitimately slow render -- Trump is the longest one
-        # in the bot -- has room to finish. Every RETRY is short (FISH_RETRY_
-        # TIMEOUT): if the first attempt already failed, the likely cause is a
-        # stalled/dead connection, and a fresh request either lands fast or
-        # isn't worth waiting on -- so a real outage surfaces quickly instead
-        # of making the user sit through the full generous timeout twice.
-        last = None
-        for attempt in range(FISH_ATTEMPTS):
-            timeout = FISH_TIMEOUT_SECONDS if attempt == 0 else FISH_RETRY_TIMEOUT
-            try:
-                return _post_once(body, timeout)
-            except Exception as e:
-                last = e
-                if attempt + 1 < FISH_ATTEMPTS:
-                    print(f"[voice] Fish attempt {attempt + 1}/{FISH_ATTEMPTS} "
-                          f"failed ({type(e).__name__}), retrying fresh")
-        raise last
 
     r = _post(payload)
     if r.status_code != 200 and ("prosody" in payload or "temperature" in payload):
@@ -1771,22 +1730,15 @@ async def speak(text: str, voice_id: str = VOICE_ID, speed: float = 1.0,
                 keep_er: bool = False) -> tuple[bytes, str]:
     text = _cap_length(_clean_for_speech(text, keep_er=keep_er), max_words)
     if os.getenv("FISH_API_KEY"):
-        # A Fish failure is never silently swapped for a flat, wrong-sounding
-        # voice -- the impression IS the bit, and a Trump script read by a
-        # generic Canadian TTS voice is worse than no clip at all. It still
-        # raises so every caller can tell the user voice isn't available
-        # right now instead of handing them the wrong voice -- but log it
-        # here first, or a run of failures is only visible one at a time in
-        # Discord with no way to see the pattern from the server side.
         try:
             return await asyncio.to_thread(_tts_sync, text, voice_id, speed), "Fish Audio"
         except Exception as e:
-            print(f"[voice] Fish Audio failed: {type(e).__name__}: {e}")
-            raise
-    # No Fish key configured at all -- local/dev, no real voice was ever in
-    # play to fall back FROM, so edge-tts is fine for testing.
+            print(f"[voice] Fish Audio failed, falling back to edge-tts: {type(e).__name__}: {e}")
+    # edge-tts doesn't understand Fish delivery tags -- it would read them out
+    # loud as words, so strip any bracketed direction on the fallback path.
     text = re.sub(r"\s*\[[^\]]*\]\s*", " ", text)
     text = re.sub(r"\s{2,}", " ", text).strip()
+    # carry the slower Torts read across to the fallback voice too
     rate = f"{round((speed - 1.0) * 100):+d}%"
     return await _edge_sync(text, rate), f"edge-tts ({EDGE_VOICE})"
 
