@@ -1123,6 +1123,10 @@ def _tts_sync(
     temperature: float | None = None,
 ) -> bytes:
     key = os.environ["FISH_API_KEY"]
+    if voice_id == TRUMP_VOICE_ID:
+        # Trump runs on his own Fish key so the flagship voice never shares
+        # fair-use headroom with the other five voices.
+        key = os.getenv("FISH_TRUMP_API_KEY") or key
     payload = {
         "text": text,
         "reference_id": voice_id,
