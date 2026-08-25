@@ -75,6 +75,12 @@ TTS_MODEL = os.getenv("FISH_MODEL", "s2.1-pro-free")
 # 180s. Production logs showed real calls sitting at the old 90s ceiling
 # before giving up, which reads to a Discord user as the bot being frozen.
 FISH_TIMEOUT_SECONDS = float(os.getenv("FISH_TIMEOUT_SECONDS", "25"))
+# Total network attempts per request. Tonight's live failures showed Fish
+# flapping -- one call streamed 255KB and still stalled, the next got 0 bytes
+# in 25s, and the clips in between succeeded fine. Against a flaky service a
+# FRESH request usually lands on a healthy path, so retrying beats waiting
+# longer on the stuck one.
+FISH_ATTEMPTS = max(1, int(os.getenv("FISH_ATTEMPTS", "2")))
 
 ASK_VOICE_PROMPT = """You are a Canadian hockey bro answering a question out loud for
 text-to-speech. Talk like a real guy in the room -- casual, direct, profanity is
@@ -1149,7 +1155,7 @@ def _tts_sync(
     if temperature is not None:
         payload["temperature"] = temperature
 
-    def _post(body):
+    def _post_once(body):
         return requests.post(
             API,
             headers={
@@ -1161,6 +1167,21 @@ def _tts_sync(
             impersonate="chrome",
             timeout=FISH_TIMEOUT_SECONDS,
         )
+
+    def _post(body):
+        # Retries NETWORK failures (timeout, connection reset) only. An HTTP
+        # error status returns normally and is handled below -- retrying a
+        # 4xx would just repeat it.
+        last = None
+        for attempt in range(FISH_ATTEMPTS):
+            try:
+                return _post_once(body)
+            except Exception as e:
+                last = e
+                if attempt + 1 < FISH_ATTEMPTS:
+                    print(f"[voice] Fish attempt {attempt + 1}/{FISH_ATTEMPTS} "
+                          f"failed ({type(e).__name__}), retrying fresh")
+        raise last
 
     r = _post(payload)
     if r.status_code != 200 and ("prosody" in payload or "temperature" in payload):
