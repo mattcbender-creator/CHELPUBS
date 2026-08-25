@@ -1123,10 +1123,13 @@ def _tts_sync(
     temperature: float | None = None,
 ) -> bytes:
     key = os.environ["FISH_API_KEY"]
+    model = TTS_MODEL
     if voice_id == TRUMP_VOICE_ID:
-        # Trump runs on his own Fish key so the flagship voice never shares
-        # fair-use headroom with the other five voices.
+        # Trump runs on his own Fish key and (when FISH_MODEL_TRUMP is set)
+        # the paid tier: the flagship voice shares neither fair-use headroom
+        # nor the free pool's no-TTFA-guarantee latency with the other voices.
         key = os.getenv("FISH_TRUMP_API_KEY") or key
+        model = os.getenv("FISH_MODEL_TRUMP", TTS_MODEL)
     payload = {
         "text": text,
         "reference_id": voice_id,
@@ -1154,7 +1157,7 @@ def _tts_sync(
             headers={
                 "Authorization": f"Bearer {key}",
                 "Content-Type": "application/json",
-                "model": TTS_MODEL,
+                "model": model,
             },
             json=body,
             impersonate="chrome",
