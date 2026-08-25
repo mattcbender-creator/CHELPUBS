@@ -1737,10 +1737,16 @@ async def speak(text: str, voice_id: str = VOICE_ID, speed: float = 1.0,
     if os.getenv("FISH_API_KEY"):
         # A Fish failure is never silently swapped for a flat, wrong-sounding
         # voice -- the impression IS the bit, and a Trump script read by a
-        # generic Canadian TTS voice is worse than no clip at all. Let it
-        # raise; every caller already catches this and tells the user voice
-        # isn't available right now instead of handing them the wrong voice.
-        return await asyncio.to_thread(_tts_sync, text, voice_id, speed), "Fish Audio"
+        # generic Canadian TTS voice is worse than no clip at all. It still
+        # raises so every caller can tell the user voice isn't available
+        # right now instead of handing them the wrong voice -- but log it
+        # here first, or a run of failures is only visible one at a time in
+        # Discord with no way to see the pattern from the server side.
+        try:
+            return await asyncio.to_thread(_tts_sync, text, voice_id, speed), "Fish Audio"
+        except Exception as e:
+            print(f"[voice] Fish Audio failed: {type(e).__name__}: {e}")
+            raise
     # No Fish key configured at all -- local/dev, no real voice was ever in
     # play to fall back FROM, so edge-tts is fine for testing.
     text = re.sub(r"\s*\[[^\]]*\]\s*", " ", text)
