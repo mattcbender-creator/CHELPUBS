@@ -7,6 +7,7 @@ Chrome's TLS stack, which gets through.
 
 import asyncio
 import difflib
+from concurrent.futures import ThreadPoolExecutor
 import re
 import time
 from urllib.parse import quote
@@ -63,6 +64,42 @@ def _savepct(m) -> float:
     return v
 
 
+def _search_platforms(query: str, timeout: int = 20) -> tuple[list, int, int]:
+    """Query every platform CONCURRENTLY and merge. Returns (hits, ok, failed).
+
+    Autocomplete used to ask common-gen5 only, so a player whose club is on
+    gen4 could never appear in the picker no matter what you typed -- which is
+    exactly what "I can't find any of these guys" looked like. Both platforms
+    are queried now, and in PARALLEL: Discord kills an autocomplete that takes
+    longer than 3s, and two sequential calls blow that budget on their own.
+    """
+    def one(platform):
+        try:
+            data = _get(f"{BASE}/members/search?platform={platform}"
+                        f"&memberName={quote(query)}", timeout=timeout)
+            return platform, data.get("members", []) or []
+        except Exception as e:
+            print(f"[ea] search FAILED q={query!r} platform={platform}: "
+                  f"{type(e).__name__}: {e}")
+            return platform, None
+
+    out, seen, ok, failed = [], set(), 0, 0
+    with ThreadPoolExecutor(max_workers=len(PLATFORMS)) as pool:
+        for platform, members in pool.map(one, PLATFORMS):
+            if members is None:
+                failed += 1
+                continue
+            ok += 1
+            for m in members:
+                ident = (str(m.get("name")), platform)
+                if ident in seen:
+                    continue
+                seen.add(ident)
+                m["_platform"] = platform
+                out.append(m)
+    return out, ok, failed
+
+
 def _all_hits(gamertag: str, fast: bool = False) -> list:
     """Every member EA returns for this query, across platforms. Cached briefly.
 
@@ -87,17 +124,12 @@ def _all_hits(gamertag: str, fast: bool = False) -> list:
         cached = _cache.get(ckey)
         if cached and now - cached[0] < _CACHE_TTL:
             return cached[1]
-        try:
-            data = _get(f"{BASE}/members/search?platform=common-gen5&memberName={quote(stem)}", timeout=2)
-        except Exception as e:
-            # Autocomplete can't raise -- Discord just drops the response --
-            # but it shouldn't fail invisibly either.
-            print(f"[ea] autocomplete FAILED stem={stem!r}: {type(e).__name__}: {e}")
+        hits, ok, failed = _search_platforms(stem, timeout=2)
+        print(f"[ea] autocomplete {stem!r} -> {len(hits)} hits "
+              f"({ok}/{ok + failed} platforms ok)")
+        if not ok:
+            # Every platform failed -- don't cache an outage as "no results".
             return []
-        hits = []
-        for m in data.get("members", []) or []:
-            m["_platform"] = "common-gen5"
-            hits.append(m)
         _cache[ckey] = (now, hits)
         return hits
 
@@ -123,22 +155,15 @@ def _all_hits(gamertag: str, fast: bool = False) -> list:
     for q in queries:
         if len(q) < MIN_QUERY:
             continue
-        for platform in PLATFORMS:
-            attempted += 1
-            try:
-                data = _get(f"{BASE}/members/search?platform={platform}&memberName={quote(q)}")
-            except Exception as e:
-                failed += 1
-                print(f"[ea] search FAILED q={q!r} platform={platform}: "
-                      f"{type(e).__name__}: {e}")
+        found, ok_n, fail_n = _search_platforms(q)
+        attempted += ok_n + fail_n
+        failed += fail_n
+        for m in found:
+            ident = (str(m.get("name")), m.get("_platform"))
+            if ident in seen:
                 continue
-            for m in data.get("members", []) or []:
-                ident = (str(m.get("name")), platform)
-                if ident in seen:
-                    continue
-                seen.add(ident)
-                m["_platform"] = platform
-                hits.append(m)
+            seen.add(ident)
+            hits.append(m)
         if hits:
             break  # longest prefix that returns anything wins
 
@@ -197,14 +222,13 @@ def _suggest_sync(query: str, limit: int = 20, fast: bool = False) -> list:
         if cached and now - cached[0] < _CACHE_TTL:
             extra = cached[1]
         else:
-            try:
-                data = _get(
-                    f"{BASE}/members/search?platform=common-gen5&memberName={quote(want)}", timeout=2
-                )
-                extra = [dict(m, _platform="common-gen5") for m in data.get("members", []) or []]
-            except Exception:
-                extra = []
-            _cache[ckey] = (now, extra)
+            # Both platforms here too -- this is the branch that rescues a tag
+            # missing from the crowded 4-char stem, so restricting it to gen5
+            # meant a gen4 player stayed invisible even on an exact typed tag.
+            extra, ok, _f = _search_platforms(want, timeout=2)
+            print(f"[ea] autocomplete exact {want!r} -> {len(extra)} hits")
+            if ok:
+                _cache[ckey] = (now, extra)
         hits = hits + extra
 
     ranked = sorted(hits, key=lambda m: _score(m, want), reverse=True)

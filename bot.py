@@ -199,8 +199,8 @@ async def _match_or_explain(person) -> tuple[dict | None, str | None]:
         "Their Discord name probably isn't their gamertag -- type the gamertag instead."
     )
 
-async def find_scout_target(interaction: discord.Interaction, gamertag: str | None,
-                            user) -> tuple[dict | None, str | None]:
+async def find_scout_target(interaction: discord.Interaction,
+                            gamertag: str | None) -> tuple[dict | None, str | None]:
     """Resolve /pubscout's input to an EA player.
 
     A Discord name and an EA gamertag are frequently not the same string, and
@@ -212,13 +212,9 @@ async def find_scout_target(interaction: discord.Interaction, gamertag: str | No
 
     Returns (player, error_message) -- exactly one is set.
     """
-    # The picker is an unambiguous choice of person, so it wins.
-    if user is not None:
-        return await _match_or_explain(user)
-
     raw = (gamertag or "").strip()
     if not raw:
-        return None, "Give me a gamertag, or use the `user` option to pick someone from Discord."
+        return None, "Give me a gamertag to look up."
 
     # A mention pasted into the text box.
     ids = _MENTION.findall(raw)
@@ -244,9 +240,8 @@ async def find_scout_target(interaction: discord.Interaction, gamertag: str | No
     if len(_norm(q)) < ea.MIN_QUERY:
         return None, (f"`{raw}` is too short to search -- EA needs at least "
                       f"{ea.MIN_QUERY} characters.")
-    return None, (f"EA has no player matching `{raw}`. Gamertags have to match how "
-                  "they're spelled in-game. If that's a Discord name rather than an "
-                  "EA gamertag, use the `user` option instead.")
+    return None, (f"EA has no player matching `{raw}`. It has to be the EA gamertag "
+                  "as spelled in-game, not a Discord name.")
 
 async def gamertag_autocomplete(interaction: discord.Interaction, current: str):
     """Ranked gamertag suggestions, refreshed on every keystroke.
@@ -642,7 +637,6 @@ VOICES = {
 
 @tree.command(name="pubscout", description="Scout an EA NHL player by gamertag")
 @app_commands.describe(gamertag="EA gamertag to look up",
-                       user="Or pick someone from Discord and I'll find their EA player",
                        voice="Optionally have the report read out loud")
 @app_commands.autocomplete(gamertag=gamertag_autocomplete)
 @app_commands.choices(voice=[
@@ -654,11 +648,10 @@ VOICES = {
     app_commands.Choice(name="Gilbert Gottfried", value="gilbert"),
 ])
 async def pubscout(interaction: discord.Interaction, gamertag: str = None,
-                   user: discord.Member = None,
                    voice: app_commands.Choice[str] = None):
     """The card is the report. A voice choice adds a clip alongside it."""
     await interaction.response.defer()
-    m, err = await find_scout_target(interaction, gamertag, user)
+    m, err = await find_scout_target(interaction, gamertag)
     if not m:
         await interaction.followup.send(err)
         return
