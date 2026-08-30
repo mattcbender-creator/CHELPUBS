@@ -169,6 +169,73 @@ async def player_note(people: list | None = None) -> str | None:
         print(f"[tag] no confident EA match for {person.display_name!r} (best {score:.2f})")
     return None
 
+async def _fetch_discord_user(interaction: discord.Interaction, uid: str):
+    """Look a Discord user up by ID over REST -- works without the members intent."""
+    person = None
+    if interaction.guild:
+        person = interaction.guild.get_member(int(uid))
+        if person is None:
+            try:
+                person = await interaction.guild.fetch_member(int(uid))
+            except Exception:
+                person = None
+    if person is None:
+        try:
+            person = await client.fetch_user(int(uid))
+        except Exception:
+            person = None
+    return person
+
+async def _match_or_explain(person) -> tuple[dict | None, str | None]:
+    """Match a Discord person to an EA player, or say why it couldn't."""
+    score, m = await match_discord_user(person)
+    if m:
+        print(f"[pubscout] {person.display_name!r} -> {m.get('name')!r} ({score:.2f})")
+        return m, None
+    print(f"[pubscout] no confident EA match for {person.display_name!r} (best {score:.2f})")
+    return None, (
+        f"Couldn't confidently match **{person.display_name}** to an EA player "
+        f"(closest guess scored {score:.2f}, needs {EA_MATCH_MIN:.2f}). "
+        "Their Discord name probably isn't their gamertag -- type the gamertag instead."
+    )
+
+async def find_scout_target(interaction: discord.Interaction, gamertag: str | None,
+                            user) -> tuple[dict | None, str | None]:
+    """Resolve /pubscout's input to an EA player.
+
+    A Discord name and an EA gamertag are frequently not the same string, and
+    the gamertag box only ever did a literal EA lookup -- so searching someone
+    by their Discord name worked ONLY when the two happened to match, which is
+    what made it look half-broken. Three ways in now: the `user` picker
+    (Discord hands us the member, no guessing), an @mention pasted into the
+    text box, or a plain gamertag exactly as before.
+
+    Returns (player, error_message) -- exactly one is set.
+    """
+    # The picker is an unambiguous choice of person, so it wins.
+    if user is not None:
+        return await _match_or_explain(user)
+
+    raw = (gamertag or "").strip()
+    if not raw:
+        return None, "Give me a gamertag, or use the `user` option to pick someone from Discord."
+
+    # A mention pasted into the text box.
+    ids = _MENTION.findall(raw)
+    if ids:
+        person = await _fetch_discord_user(interaction, ids[0])
+        if person is None:
+            return None, "Couldn't look that Discord user up."
+        return await _match_or_explain(person)
+
+    # Plain text: an EA gamertag, tolerating a leading @ people type by habit.
+    q = raw.lstrip("@").strip()
+    m = await ea.search_player(q)
+    if m:
+        return m, None
+    return None, (f"No player found for `{raw}`. If that's a Discord name rather than "
+                  "an EA gamertag, use the `user` option instead.")
+
 async def gamertag_autocomplete(interaction: discord.Interaction, current: str):
     """Ranked gamertag suggestions, refreshed on every keystroke.
 
@@ -563,6 +630,7 @@ VOICES = {
 
 @tree.command(name="pubscout", description="Scout an EA NHL player by gamertag")
 @app_commands.describe(gamertag="EA gamertag to look up",
+                       user="Or pick someone from Discord and I'll find their EA player",
                        voice="Optionally have the report read out loud")
 @app_commands.autocomplete(gamertag=gamertag_autocomplete)
 @app_commands.choices(voice=[
@@ -573,13 +641,14 @@ VOICES = {
     app_commands.Choice(name="1940s Filmstrip", value="narrator"),
     app_commands.Choice(name="Gilbert Gottfried", value="gilbert"),
 ])
-async def pubscout(interaction: discord.Interaction, gamertag: str,
+async def pubscout(interaction: discord.Interaction, gamertag: str = None,
+                   user: discord.Member = None,
                    voice: app_commands.Choice[str] = None):
     """The card is the report. A voice choice adds a clip alongside it."""
     await interaction.response.defer()
-    m = await ea.search_player(gamertag)
+    m, err = await find_scout_target(interaction, gamertag, user)
     if not m:
-        await interaction.followup.send(f"No player found for `{gamertag}`.")
+        await interaction.followup.send(err)
         return
 
     standout = ea.standout_trait(m)
