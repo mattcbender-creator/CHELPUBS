@@ -137,35 +137,18 @@ def _all_hits(gamertag: str, fast: bool = False) -> list:
     if cached and now - cached[0] < _CACHE_TTL:
         return cached[1]
 
-    # EA's search is a PREFIX match with a 4-character minimum: "byfu" finds
-    # "Byfuglien x33l", but "yfuglien" finds nothing and "tes" is too short.
-    # There is no typo tolerance, so walk the prefix back one character at a
-    # time -- that rescues trailing junk like "Byfuglien33" -> "Byfuglien".
+    # ONE search. EA's endpoint is a prefix match with a 4-character minimum,
+    # so the string actually typed is the query. The old code walked the
+    # prefix back a character at a time -- for a 15-character tag that was up
+    # to a dozen queries, each hitting both platforms, so ~24 calls against a
+    # flaky API before admitting it found nothing. It bought one rare case
+    # (typing MORE than the real tag, "Byfuglien33" -> "Byfuglien") and paid
+    # for it on every single lookup.
     q0 = gamertag.strip()
-    queries = [q0]
-    for cut in range(len(q0) - 1, MIN_QUERY - 1, -1):
-        queries.append(q0[:cut])
-    # A multi-word tag also gets its first word tried on its own.
-    first = q0.split()[0] if q0.split() else ""
-    if len(first) >= MIN_QUERY and first not in queries:
-        queries.append(first)
-
-    hits, seen = [], set()
-    attempted = failed = 0
-    for q in queries:
-        if len(q) < MIN_QUERY:
-            continue
-        found, ok_n, fail_n = _search_platforms(q)
-        attempted += ok_n + fail_n
-        failed += fail_n
-        for m in found:
-            ident = (str(m.get("name")), m.get("_platform"))
-            if ident in seen:
-                continue
-            seen.add(ident)
-            hits.append(m)
-        if hits:
-            break  # longest prefix that returns anything wins
+    if len(q0) < MIN_QUERY:
+        return []
+    hits, ok_n, fail_n = _search_platforms(q0)
+    attempted, failed = ok_n + fail_n, fail_n
 
     # Nothing got through at all -- that is an outage, not an empty result,
     # and must not be cached or reported as "no such player".
