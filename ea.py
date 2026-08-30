@@ -7,6 +7,7 @@ Chrome's TLS stack, which gets through.
 
 import asyncio
 import difflib
+import os
 from concurrent.futures import ThreadPoolExecutor
 import re
 import time
@@ -31,7 +32,12 @@ _cache: dict[str, tuple[float, list]] = {}
 _CACHE_TTL = 120
 
 BASE = "https://proclubs.ea.com/api/nhl"
-PLATFORMS = ["common-gen5", "common-gen4"]
+# Env-overridable: EA returns HTTP 400 for common-gen4 on members/search
+# (confirmed in production logs), and if EA changes which platform strings
+# that endpoint accepts, this needs to be fixable from Railway without a
+# deploy. Comma-separated.
+PLATFORMS = [p.strip() for p in
+             os.getenv("EA_PLATFORMS", "common-gen5,common-gen4").split(",") if p.strip()]
 
 # EA's field prefix -> what a human calls the position.
 POSITIONS = [
@@ -64,28 +70,52 @@ def _savepct(m) -> float:
     return v
 
 
-def _search_platforms(query: str, timeout: int = 20) -> tuple[list, int, int]:
-    """Query every platform CONCURRENTLY and merge. Returns (hits, ok, failed).
+def _case_variants(q: str) -> list[str]:
+    """The same query in the casings EA might actually be storing.
 
-    Autocomplete used to ask common-gen5 only, so a player whose club is on
-    gen4 could never appear in the picker no matter what you typed -- which is
-    exactly what "I can't find any of these guys" looked like. Both platforms
-    are queried now, and in PARALLEL: Discord kills an autocomplete that takes
-    longer than 3s, and two sequential calls blow that budget on their own.
+    Production logs showed gen5 answering fine and returning ZERO hits for
+    "xxbl" while xXBLANKSHADOWXx plainly exists -- EA's search looks
+    case-sensitive, so a lowercase query can never match a CamelCase tag.
+    Ordered, deduped, original first so an exact hit costs nothing extra.
     """
-    def one(platform):
+    out = []
+    for v in (q, q.lower(), q.upper(), q.title(), q.capitalize()):
+        if v and v not in out:
+            out.append(v)
+    return out
+
+
+def _search_many(queries: list[str], timeout: int = 20) -> tuple[list, int, int]:
+    """Every (query, platform) pair, all at once. Returns (hits, ok, failed).
+
+    Two things this fixes, both proven from production logs:
+    - autocomplete used to ask common-gen5 ONLY, so a player on another
+      platform could never appear in the picker at all;
+    - EA's search looks case-sensitive, so a lowercase query returned zero
+      hits against a tag actually spelled xXBLANKSHADOWXx.
+
+    Everything runs CONCURRENTLY, so trying several casings across several
+    platforms still costs one round-trip of wall-clock time -- which matters,
+    because Discord discards an autocomplete response after 3 seconds.
+    """
+    jobs = [(q, p) for q in queries for p in PLATFORMS]
+    if not jobs:
+        return [], 0, 0
+
+    def one(job):
+        q, platform = job
         try:
             data = _get(f"{BASE}/members/search?platform={platform}"
-                        f"&memberName={quote(query)}", timeout=timeout)
+                        f"&memberName={quote(q)}", timeout=timeout)
             return platform, data.get("members", []) or []
         except Exception as e:
-            print(f"[ea] search FAILED q={query!r} platform={platform}: "
+            print(f"[ea] search FAILED q={q!r} platform={platform}: "
                   f"{type(e).__name__}: {e}")
             return platform, None
 
     out, seen, ok, failed = [], set(), 0, 0
-    with ThreadPoolExecutor(max_workers=len(PLATFORMS)) as pool:
-        for platform, members in pool.map(one, PLATFORMS):
+    with ThreadPoolExecutor(max_workers=min(10, len(jobs))) as pool:
+        for platform, members in pool.map(one, jobs):
             if members is None:
                 failed += 1
                 continue
@@ -98,6 +128,11 @@ def _search_platforms(query: str, timeout: int = 20) -> tuple[list, int, int]:
                 m["_platform"] = platform
                 out.append(m)
     return out, ok, failed
+
+
+def _search_platforms(query: str, timeout: int = 20) -> tuple[list, int, int]:
+    """One query across every platform and every plausible casing."""
+    return _search_many(_case_variants(query), timeout=timeout)
 
 
 def _all_hits(gamertag: str, fast: bool = False) -> list:
