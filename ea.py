@@ -15,6 +15,16 @@ from curl_cffi import requests
 
 MIN_QUERY = 4  # EA's search ignores anything shorter
 
+
+class EAUnavailable(Exception):
+    """Every EA call for a query failed.
+
+    Distinct from "EA answered, nobody matched" -- the old code caught both
+    and returned an empty list, so an EA outage, a rate limit, a changed
+    endpoint and a genuinely unknown gamertag all surfaced to the user as the
+    same flat "No player found."
+    """
+
 # Small TTL cache -- Discord autocomplete fires on every keystroke.
 _cache: dict[str, tuple[float, list]] = {}
 _CACHE_TTL = 120
@@ -79,7 +89,10 @@ def _all_hits(gamertag: str, fast: bool = False) -> list:
             return cached[1]
         try:
             data = _get(f"{BASE}/members/search?platform=common-gen5&memberName={quote(stem)}", timeout=2)
-        except Exception:
+        except Exception as e:
+            # Autocomplete can't raise -- Discord just drops the response --
+            # but it shouldn't fail invisibly either.
+            print(f"[ea] autocomplete FAILED stem={stem!r}: {type(e).__name__}: {e}")
             return []
         hits = []
         for m in data.get("members", []) or []:
@@ -106,13 +119,18 @@ def _all_hits(gamertag: str, fast: bool = False) -> list:
         queries.append(first)
 
     hits, seen = [], set()
+    attempted = failed = 0
     for q in queries:
         if len(q) < MIN_QUERY:
             continue
         for platform in PLATFORMS:
+            attempted += 1
             try:
                 data = _get(f"{BASE}/members/search?platform={platform}&memberName={quote(q)}")
-            except Exception:
+            except Exception as e:
+                failed += 1
+                print(f"[ea] search FAILED q={q!r} platform={platform}: "
+                      f"{type(e).__name__}: {e}")
                 continue
             for m in data.get("members", []) or []:
                 ident = (str(m.get("name")), platform)
@@ -124,6 +142,14 @@ def _all_hits(gamertag: str, fast: bool = False) -> list:
         if hits:
             break  # longest prefix that returns anything wins
 
+    # Nothing got through at all -- that is an outage, not an empty result,
+    # and must not be cached or reported as "no such player".
+    if attempted and failed == attempted:
+        raise EAUnavailable(f"all {attempted} EA calls failed for {gamertag!r}")
+
+    print(f"[ea] search {gamertag!r} -> {len(hits)} hits "
+          f"({attempted - failed}/{attempted} calls ok)"
+          + (f" e.g. {[h.get('name') for h in hits[:5]]}" if hits else ""))
     _cache[key] = (now, hits)
     return hits
 

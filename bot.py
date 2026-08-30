@@ -230,11 +230,23 @@ async def find_scout_target(interaction: discord.Interaction, gamertag: str | No
 
     # Plain text: an EA gamertag, tolerating a leading @ people type by habit.
     q = raw.lstrip("@").strip()
-    m = await ea.search_player(q)
+    try:
+        m = await ea.search_player(q)
+    except ea.EAUnavailable as e:
+        # EA's API is down or blocking us -- say so, rather than claiming the
+        # player doesn't exist. Those are completely different problems and
+        # they used to look identical.
+        print(f"[pubscout] EA unavailable for {q!r}: {e}")
+        return None, ("EA's API isn't answering right now, so I can't look anyone up. "
+                      "That's on EA's end, not the gamertag -- try again in a bit.")
     if m:
         return m, None
-    return None, (f"No player found for `{raw}`. If that's a Discord name rather than "
-                  "an EA gamertag, use the `user` option instead.")
+    if len(_norm(q)) < ea.MIN_QUERY:
+        return None, (f"`{raw}` is too short to search -- EA needs at least "
+                      f"{ea.MIN_QUERY} characters.")
+    return None, (f"EA has no player matching `{raw}`. Gamertags have to match how "
+                  "they're spelled in-game. If that's a Discord name rather than an "
+                  "EA gamertag, use the `user` option instead.")
 
 async def gamertag_autocomplete(interaction: discord.Interaction, current: str):
     """Ranked gamertag suggestions, refreshed on every keystroke.
