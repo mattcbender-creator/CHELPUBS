@@ -39,21 +39,27 @@ def log_clip(voice: str, script: str, audio: bytes, keep_er: bool = False) -> No
     back turns the next correction into a WPS_* variable change instead of a
     guess -- and the measured rate is printed ready to paste.
     """
-    secs = vc.mp3_duration(audio)
-    # count what was actually spoken -- speak() cleans and caps the script, so
-    # counting the raw script inflated the rate (a 77-word script capped to 66
-    # words logged as 4.84 wps when the voice really read ~4.1)
-    spoken = vc._cap_length(vc._clean_for_speech(script, keep_er=keep_er),
-                            vc.word_cap(voice))
-    n = len(spoken.split())
-    if not secs:
-        print(f"[clip] {voice}: {n} words, duration unknown")
-        return
-    # only over-length is a fault now -- a short answer to a short question is
-    # the point, not a miss
-    verdict = "OVER" if secs > vc.CLIP_MAX_SECONDS else "ok"
-    print(f"[clip] {voice}: {secs}s / {n} words = {n / secs:.2f} wps "
-          f"(ceiling {vc.CLIP_MAX_SECONDS:.0f}s) {verdict}")
+    # Every caller runs this INSIDE the try that reports "Voice shit the bed",
+    # so a bad duration parse used to fail a clip that had already been
+    # generated fine. Measuring is never worth losing the audio over.
+    try:
+        secs = vc.mp3_duration(audio)
+        # count what was actually spoken -- speak() cleans and caps the script,
+        # so counting the raw script inflated the rate (a 77-word script capped
+        # to 66 words logged as 4.84 wps when the voice really read ~4.1)
+        spoken = vc._cap_length(vc._clean_for_speech(script, keep_er=keep_er),
+                                vc.word_cap(voice))
+        n = len(spoken.split())
+        if not secs:
+            print(f"[clip] {voice}: {n} words, duration unknown")
+            return
+        # only over-length is a fault now -- a short answer to a short question
+        # is the point, not a miss
+        verdict = "OVER" if secs > vc.CLIP_MAX_SECONDS else "ok"
+        print(f"[clip] {voice}: {secs}s / {n} words = {n / secs:.2f} wps "
+              f"(ceiling {vc.CLIP_MAX_SECONDS:.0f}s) {verdict}")
+    except Exception as e:
+        print(f"[clip] {voice}: measuring failed ({type(e).__name__}: {e})")
 
 _MENTION = re.compile(r"<@!?(\d+)>")
 
@@ -348,7 +354,7 @@ intents = discord.Intents.default()
 client = discord.Client(intents=intents, allowed_mentions=discord.AllowedMentions.none())
 tree = app_commands.CommandTree(client)
 
-@tree.command(name="ask-buddy", description="Ask the Canadian hockey guy anything")
+@tree.command(name="ask-buddy", description="Ask anything, answered by the Canadian hockey guy")
 @app_commands.describe(question="What do you want to know?")
 async def ask_buddy(interaction: discord.Interaction, question: str):
     """One box, a clip back -- the same shape as every other /ask-*.
@@ -378,6 +384,7 @@ async def ask_buddy(interaction: discord.Interaction, question: str):
     body = answer or "Got nothing back. Try again."
     try:
         audio, engine = await vc.speak(body)
+        log_clip("buddy", body, audio)
     except Exception as e:
         await interaction.followup.send(
             f"Voice shit the bed: `{type(e).__name__}: {e}`\n\n**Q:** {question}\n{body}"[:2000]
@@ -484,7 +491,7 @@ async def ask_cherry(interaction: discord.Interaction, question: str):
     clip = clip_file(audio, "ask-cherry")
     await interaction.followup.send(f"**Q:** {question}"[:2000], file=clip)
 
-@tree.command(name="ask-torts", description="Ask Torts anything, answered like a presser")
+@tree.command(name="ask-torts", description="Ask anything, answered by Tortorella at a presser")
 @app_commands.describe(question="What do you want to know?")
 async def ask_torts(interaction: discord.Interaction, question: str):
     await interaction.response.defer()
@@ -537,7 +544,7 @@ async def ask_torts(interaction: discord.Interaction, question: str):
     clip = clip_file(audio, "ask-torts")
     await interaction.followup.send(f"**Q:** {question}"[:2000], file=clip)
 
-@tree.command(name="ask-narrator", description="Ask anything, narrated like a 1950s classroom filmstrip")
+@tree.command(name="ask-narrator", description="Ask anything, narrated like a 1940s classroom filmstrip")
 @app_commands.describe(question="What do you want to know?")
 async def ask_narrator(interaction: discord.Interaction, question: str):
     await interaction.response.defer()
@@ -693,6 +700,7 @@ async def pubscout(interaction: discord.Interaction, gamertag: str,
         return
     files = [discord.File(io.BytesIO(png),
                           filename=f"{CLIP_BRAND}-pubscout-{m.get('name')}.png")]
+    voice_error = None
 
     if voice and voice.value == "narrator":
         # Two speakers, not the (prompt, single voice_id) shape every other
@@ -728,6 +736,7 @@ async def pubscout(interaction: discord.Interaction, gamertag: str,
                                       filename=f"{CLIP_BRAND}-pubscout-narrator.mp3"))
         except Exception as e:
             print(f"[pubscout] voice failed: {type(e).__name__}: {e}")
+            voice_error = f"{type(e).__name__}: {e}"
     elif voice:
         prompt_fn, vid_fn, ramped, max_words, keep_er = VOICES[voice.value]
         try:
@@ -756,8 +765,73 @@ async def pubscout(interaction: discord.Interaction, gamertag: str,
         except Exception as e:
             # a failed clip must not cost the user his card
             print(f"[pubscout] voice failed: {type(e).__name__}: {e}")
+            voice_error = f"{type(e).__name__}: {e}"
 
-    await interaction.followup.send(files=files)
+    # A dropped clip used to be logged server-side and nowhere else: you asked
+    # for a voice, got a silent card back, and had no way to tell whether the
+    # voice had failed or you'd mis-picked the option. Say it.
+    if voice_error:
+        await interaction.followup.send(
+            f"Card's below -- the **{voice.name}** clip didn't come back: "
+            f"`{voice_error}`"[:2000], files=files)
+    else:
+        await interaction.followup.send(files=files)
+
+
+HELP = """**ChelScout Pubs**
+
+**Ask a voice something** -- one question in, a clip back. Same for all six.
+`/ask-buddy` -- the Canadian hockey guy
+`/ask-trump` -- Trump
+`/ask-cherry` -- Don Cherry
+`/ask-torts` -- Tortorella, mid-presser
+`/ask-gilbert` -- Gilbert Gottfried
+`/ask-narrator` -- a 1940s classroom filmstrip, with the kid butting in
+
+**Scout a player**
+`/pubscout <gamertag>` -- the stat card and a written read.
+Start typing and it suggests real EA gamertags; pick one off the list and you
+can't typo it. It has to be the EA gamertag as spelled in-game, not a Discord
+name -- and it's case-sensitive on EA's end, so the suggestions are the safe
+way in. Add the optional **voice** option and any of the six above reads the
+card out loud alongside it.
+
+You can @mention someone in any question -- if his Discord name matches an EA
+gamertag closely enough, the answer knows his actual stats."""
+
+
+@tree.command(name="help", description="What this bot can do, and every voice it can do it in")
+async def help_cmd(interaction: discord.Interaction):
+    """Only the person who ran it sees this -- a help dump doesn't need to
+    sit in the channel forever."""
+    await interaction.response.send_message(HELP, ephemeral=True)
+
+
+@tree.error
+async def on_app_command_error(interaction: discord.Interaction,
+                               error: app_commands.AppCommandError) -> None:
+    """Never leave a command spinning with nothing to show for it.
+
+    Every handler already guards the two calls that actually fail -- the model
+    and the voice. Anything OUTSIDE those (Discord itself, an oversized file,
+    a plain bug) escaped into discord.py's default handler, which logs to the
+    console and says nothing in the channel: the command sat on "thinking"
+    until Discord timed it out. That reads as the whole bot being broken
+    rather than one request going wrong, which is the worse of the two.
+    """
+    err = getattr(error, "original", error)
+    cmd = interaction.command.name if interaction.command else "?"
+    print(f"[error] /{cmd}: {type(err).__name__}: {err}")
+    msg = f"`/{cmd}` broke: `{type(err).__name__}: {err}`"[:1900]
+    try:
+        # Past the defer the only way back in is a followup; before it, the
+        # first response is still owed.
+        if interaction.response.is_done():
+            await interaction.followup.send(msg)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+    except Exception as e:
+        print(f"[error] couldn't report that in the channel: {type(e).__name__}: {e}")
 
 
 @client.event
