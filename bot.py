@@ -349,41 +349,42 @@ client = discord.Client(intents=intents, allowed_mentions=discord.AllowedMention
 tree = app_commands.CommandTree(client)
 
 @tree.command(name="ask-buddy", description="Ask the Canadian hockey guy anything")
-@app_commands.describe(
-    question="What do you want to know?",
-    voice="Get it as a spoken clip from a Canadian hockey guy instead",
-)
-async def ask_buddy(interaction: discord.Interaction, question: str, voice: bool = False):
+@app_commands.describe(question="What do you want to know?")
+async def ask_buddy(interaction: discord.Interaction, question: str):
+    """One box, a clip back -- the same shape as every other /ask-*.
+
+    This used to be the only command in the set that made you answer a
+    True/False before it would do anything, and its default was the one mode
+    none of the others had. If the clip fails the written answer still goes
+    out, so nothing is lost by dropping the toggle.
+    """
     await interaction.response.defer()
     question, people = await resolve_mentions(interaction, question)
     note = await player_note(people)
     try:
         resp = await call_llm(
             messages=[
-                {"role": "system", "content": vc.ASK_VOICE_PROMPT if voice else SYSTEM_PROMPT},
+                {"role": "system", "content": vc.ASK_VOICE_PROMPT},
                 *([{"role": "system", "content": note}] if note else []),
                 {"role": "user", "content": question},
             ],
-            max_tokens=220 if voice else 500,
-            temperature=0.75 if voice else 0.8,
+            max_tokens=220,
+            temperature=0.75,
         )
         answer = vc.strip_language_reactions((resp.choices[0].message.content or "").strip())
     except Exception as e:
         await interaction.followup.send(f"OpenRouter shit the bed: `{type(e).__name__}: {e}`")
         return
     body = answer or "Got nothing back. Try again."
-    if voice:
-        try:
-            audio, engine = await vc.speak(body)
-        except Exception as e:
-            await interaction.followup.send(
-                f"Voice shit the bed: `{type(e).__name__}: {e}`\n\n**Q:** {question}\n{body}"[:2000]
-            )
-            return
-        clip = clip_file(audio, "ask-buddy")
-        await interaction.followup.send(f"**Q:** {question}"[:2000], file=clip)
+    try:
+        audio, engine = await vc.speak(body)
+    except Exception as e:
+        await interaction.followup.send(
+            f"Voice shit the bed: `{type(e).__name__}: {e}`\n\n**Q:** {question}\n{body}"[:2000]
+        )
         return
-    await interaction.followup.send(f"**Q:** {question}\n{body}"[:2000])
+    clip = clip_file(audio, "ask-buddy")
+    await interaction.followup.send(f"**Q:** {question}"[:2000], file=clip)
 
 @tree.command(name="ask-trump", description="Ask anything, answered in a Trump impression")
 @app_commands.describe(question="What do you want to know?")
@@ -647,7 +648,7 @@ VOICES = {
     app_commands.Choice(name="1940s Filmstrip", value="narrator"),
     app_commands.Choice(name="Gilbert Gottfried", value="gilbert"),
 ])
-async def pubscout(interaction: discord.Interaction, gamertag: str = None,
+async def pubscout(interaction: discord.Interaction, gamertag: str,
                    voice: app_commands.Choice[str] = None):
     """The card is the report. A voice choice adds a clip alongside it."""
     await interaction.response.defer()
