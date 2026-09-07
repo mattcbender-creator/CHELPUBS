@@ -26,6 +26,7 @@ within a player's own position -- see that file for why.
 import bisect
 import io
 import json
+import math
 import os
 
 from PIL import Image, ImageDraw, ImageFont
@@ -93,6 +94,97 @@ LABELS = {
     "savepct": "SAVE %", "gaa": "GOALS AGAINST", "workload": "WORKLOAD",
     "shutouts": "SHUTOUTS",
 }
+
+# The radar draws EVERY graded skill for the position, not just the four the
+# bar rows pick out -- a fifth axis is what turns a diamond into a shape. The
+# pool has percentile bands for all five skater metrics at every position and
+# all four goalie metrics, so nothing here is on a made-up scale. Fixed order:
+# adjacent axes are related (the two scoring skills together, the two
+# "how he plays" skills together), so the outline reads as a profile.
+RADAR_AXES = {
+    "skater": ["scoring", "playmaking", "impact", "physicality", "discipline"],
+    "G": ["savepct", "gaa", "workload", "shutouts"],
+}
+RADAR_R = 140          # radius of the 100th-percentile ring
+RADAR_LABEL_ROOM = 48  # vertical room for the two-line labels above and below
+
+
+def radar_axes(primary: str, rates: dict, is_goalie: bool) -> list[tuple[str, str, int]]:
+    """(label, metric, percentile) per axis, in RADAR_AXES order.
+
+    Goes through the same percentile() call as the bar rows, on the same
+    rates dict, so a skill that appears in both places can never carry two
+    different numbers. An axis with no band (or a goalie with no recorded
+    saves, the same exclusion the bars make) is dropped rather than drawn at
+    zero -- a missing grade is not a bad grade.
+    """
+    out = []
+    for key in RADAR_AXES["G" if is_goalie else "skater"]:
+        if key not in rates:
+            continue
+        if key == "workload" and not rates[key]:
+            continue
+        p = percentile(primary, key, rates[key])
+        if p is None:
+            continue
+        out.append((LABELS[key], key, p))
+    return out
+
+
+def radar_points(cx: float, cy: float, r: float, values: list) -> list[tuple[float, float]]:
+    """One vertex per value (0-100): first axis straight up, then clockwise.
+
+    Pure geometry so it can be checked in isolation -- a value of 100 lands
+    exactly r from the centre on its axis, 50 lands at r/2, 0 at the centre.
+    """
+    n = len(values)
+    pts = []
+    for i, v in enumerate(values):
+        a = -math.pi / 2 + 2 * math.pi * i / n
+        d = r * max(0, min(100, v)) / 100
+        pts.append((cx + d * math.cos(a), cy + d * math.sin(a)))
+    return pts
+
+
+def _radar(img, cx: float, cy: float, r: float, axes: list, f_lbl, f_word) -> list:
+    """Draw the shape onto img. Returns the vertex points it drew.
+
+    Rings at 25/50/75/100 with the 50th ring brighter -- that is the "typical
+    player" reference, the same one the bars' legend names. The fill is the
+    brand blue at low opacity on an RGBA overlay, so the card stays black and
+    the outline, not the fill, carries the shape. Each vertex is labelled with
+    the metric and the SAME tier word + ordinal the bar rows print, in the
+    tier colour, so the reading never depends on judging a distance.
+    """
+    n = len(axes)
+    vals = [p for _, _, p in axes]
+    ov = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(ov)
+    for ring in (25, 50, 75, 100):
+        col = (70, 76, 92, 255) if ring == 50 else (LINE[0], LINE[1], LINE[2], 255)
+        d.polygon(radar_points(cx, cy, r, [ring] * n), outline=col)
+    for x, y in radar_points(cx, cy, r, [100] * n):
+        d.line([(cx, cy), (x, y)], fill=(LINE[0], LINE[1], LINE[2], 255), width=1)
+    # a 0th-percentile vertex still gets a visible nub so the outline closes
+    pts = radar_points(cx, cy, r, [max(v, 3) for v in vals])
+    d.polygon(pts, fill=(BLUE[0], BLUE[1], BLUE[2], 95))
+    d.line(pts + [pts[0]], fill=(BLUE_TEXT[0], BLUE_TEXT[1], BLUE_TEXT[2], 255),
+           width=3, joint="curve")
+    for x, y in pts:
+        d.ellipse([x - 5, y - 5, x + 5, y + 5],
+                  fill=(BLUE_TEXT[0], BLUE_TEXT[1], BLUE_TEXT[2], 255),
+                  outline=(BG[0], BG[1], BG[2], 255), width=2)
+    img.paste(Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB"))
+
+    d = ImageDraw.Draw(img)
+    for i, ((lbl, _, p), (x, y)) in enumerate(zip(axes, radar_points(cx, cy, r, [100] * n))):
+        a = -math.pi / 2 + 2 * math.pi * i / n
+        dx, dy = math.cos(a), math.sin(a)
+        lx, ly = x + dx * 34, y + dy * 26
+        anchor = "lm" if dx > 0.3 else ("rm" if dx < -0.3 else "mm")
+        _text(d, (lx, ly - 11), lbl, f_lbl, MUTED, anchor=anchor)
+        _text(d, (lx, ly + 9), f"{tier(p)}  {_ordinal(p)}", f_word, _pole(p), anchor=anchor)
+    return pts
 
 # Shown to the right of each bar, so a reader sees the raw rate, not only a rank.
 def _fmt(metric: str, v: float) -> str:
@@ -288,8 +380,11 @@ def _bar_row(d, y, lbl, metric, value, p, f_lbl, f_val, f_small, small=False):
     return y + (36 if small else 50)
 
 
-def render(m: dict, read: str | None = None) -> bytes:
-    """Draw the card for one player. `read` is optional prose under the stats."""
+def render(m: dict, read: str | None = None, _debug: dict | None = None) -> bytes:
+    """Draw the card for one player. `read` is optional prose under the stats.
+
+    `_debug`, if given, receives the radar's geometry (centre, radius, axes,
+    vertices) so a test can check the drawn pixels against the numbers."""
     name = str(m.get("name") or "unknown")
     gp = ea._num(m.get("gamesplayed"))
     glgp = ea._num(m.get("glgp"))
@@ -352,6 +447,11 @@ def render(m: dict, read: str | None = None) -> bytes:
 
     verdict = _verdict(primary, rows, is_goalie)
 
+    # Fewer than three axes is a line, not a shape -- skip the radar then.
+    axes = radar_axes(primary, rates, is_goalie)
+    show_radar = len(axes) >= 3
+    radar_h = 2 * RADAR_R + 2 * RADAR_LABEL_ROOM + 16
+
     read_lines: list[str] = []
     if read:
         tmp = ImageDraw.Draw(Image.new("RGB", (10, 10)))
@@ -375,6 +475,7 @@ def render(m: dict, read: str | None = None) -> bytes:
          + 132          # stat tiles
          + (92 if not is_goalie and points else 0)   # play-style axis
          + (54 + len(sec_rows) * 36 + 22 if sec_rows else 0)
+         + (radar_h if show_radar else 0)
          + 62           # bars header + legend
          + len(rows) * 52
          + 74)
@@ -480,6 +581,20 @@ def render(m: dict, read: str | None = None) -> bytes:
     ref_name = "FORWARDS" if ref == "F" else primary
     _text(d, (PAD, y), f"RANKED VS {n_pool} {ref_name} WITH 50+ GAMES", f_statlbl, DIM)
     y += 24
+
+    # ---- the shape, then the bars. Same percentiles twice on purpose: the
+    # radar is the glance ("wide up top, dented at physicality"), the bars are
+    # the precision, and having both on one card lets anyone check one
+    # against the other.
+    if show_radar:
+        _text(d, (W - PAD, y - 24), "grey ring = a typical player", f_note, DIM, anchor="ra")
+        cx, cy = W / 2, y + RADAR_LABEL_ROOM + RADAR_R
+        pts = _radar(img, cx, cy, RADAR_R, axes, f_statlbl, f_val)
+        d = ImageDraw.Draw(img)
+        if _debug is not None:
+            _debug["radar"] = {"cx": cx, "cy": cy, "r": RADAR_R, "axes": axes, "points": pts}
+        y += radar_h
+
     _text(d, (PAD, y), "longer and greener is better · 50th is a typical player", f_note, DIM)
     y += 30
 
