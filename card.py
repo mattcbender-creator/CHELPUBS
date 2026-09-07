@@ -245,6 +245,20 @@ def _font(name: str, size: int):
 
 MIN_POOL_N = 150
 FORWARDS = ("C", "LW", "RW")
+# Under this many games at his position the grades are one good night away
+# from moving 30 percentiles, and the card says so.
+EARLY_GP = 20
+
+
+def pool_info(ref: str) -> tuple[int, int, str | None]:
+    """(pool size, game floor, season label) for the position being ranked
+    against. build_pool.py stamps these per position; a pool.json without
+    the stamp is the pre-launch file and gets the old fixed floors."""
+    p = pool()
+    n = max(p.get("counts", {}).get(ref, {}).values() or [0])
+    info = p.get("meta", {}).get("positions", {}).get(ref, {})
+    floor = info.get("floor") or p.get("min_pool_glgp" if ref == "G" else "min_pool_gp", 50)
+    return n, floor, info.get("source")
 
 
 def _breakpoints(pos: str, metric: str):
@@ -500,6 +514,11 @@ def render(m: dict, read: str | None = None, _debug: dict | None = None) -> byte
     y += 62
     _text(d, (PAD, y), name[:17], f_name, TEXT)
     _text(d, (W - PAD, y + 30), f"{gp:.0f} GAMES", f_sub, MUTED, anchor="ra")
+    # Two days into a season a 9-game player carries a 100th-percentile
+    # discipline grade on zero penalty minutes. The number is real; the
+    # sample isn't, and the card should say which before anyone argues.
+    if (glgp if is_goalie else skater_gp) < EARLY_GP:
+        _text(d, (W - PAD, y + 58), "EARLY READ · SMALL SAMPLE", f_statlbl, AMBER, anchor="ra")
 
     # ---- the read leads the card. It is the fastest path to "what is this
     # guy", so it goes above every number rather than under them. The computed
@@ -577,9 +596,15 @@ def render(m: dict, read: str | None = None, _debug: dict | None = None) -> byte
 
     # ---- rating bars
     ref = _breakpoints(primary, rows[0][1])[1] if rows else primary
-    n_pool = max(pool().get("counts", {}).get(ref, {}).values() or [0])
+    n_pool, floor, source = pool_info(ref)
     ref_name = "FORWARDS" if ref == "F" else primary
-    _text(d, (PAD, y), f"RANKED VS {n_pool} {ref_name} WITH 50+ GAMES", f_statlbl, DIM)
+    # The floor and the season come from the pool file, not a constant: in
+    # the first weeks of a new season the floor ramps up from 15 and some
+    # positions are still ranked on last season's curve. Print what it is.
+    header = f"RANKED VS {n_pool} {ref_name} WITH {floor}+ GAMES"
+    if source:
+        header += f"  ·  {source.upper()} POOL"
+    _text(d, (PAD, y), header, f_statlbl, DIM)
     y += 24
 
     # ---- the shape, then the bars. Same percentiles twice on purpose: the

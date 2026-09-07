@@ -135,6 +135,23 @@ def _search_platforms(query: str, timeout: int = 20) -> tuple[list, int, int]:
     return _search_many(_case_variants(query), timeout=timeout)
 
 
+def sample_hits(stem: str, timeout: int = 8) -> list:
+    """Population sampling for build_pool.py: two casings, not five.
+
+    A lookup has to find one specific player, so it is worth every spelling.
+    A population sample only has to be representative, and the case-variant
+    change turned the 1,136-stem scrape into ~11,000 requests -- against an
+    API that banned a whole machine partway through the last run. Lowercase
+    plus Capitalized covers how most tags actually start, at 40% of the cost.
+    Raises EAUnavailable if every call failed, so a blocked scraper aborts
+    instead of quietly sampling nothing.
+    """
+    hits, ok, failed = _search_many([stem.lower(), stem.capitalize()], timeout=timeout)
+    if failed and not ok:
+        raise EAUnavailable(f"all {failed} EA calls failed for stem {stem!r}")
+    return hits
+
+
 def _all_hits(gamertag: str, fast: bool = False) -> list:
     """Every member EA returns for this query, across platforms. Cached briefly.
 

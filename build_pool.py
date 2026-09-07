@@ -1,10 +1,22 @@
 """Build the percentile pool used by the minicard.
 
-Run locally, commit the result. Railway containers are ephemeral, so sampling
-at boot would repeat this work on every deploy for no benefit -- the shape of
-the population barely moves week to week.
+Runs weekly from .github/workflows/rebuild-pool.yml (or locally); commits the
+result. Railway containers are ephemeral, so sampling at boot would repeat
+this work on every deploy for no benefit -- the shape of the population
+barely moves week to week.
 
-    python build_pool.py            # writes pool.json
+    python build_pool.py            # writes pool.json (reuses players_raw.json)
+    python build_pool.py --refresh  # re-samples EA first
+
+HOW A NEW SEASON CHANGES OVER. On launch day nobody has 50 games, so a fixed
+floor would produce an empty pool. Instead every position tries the floors
+in FLOORS from strictest to loosest and keeps the strictest one that still
+yields MIN_POOL_N players. A position that clears nothing keeps the bands it
+had in the previous pool.json -- last season's curve -- and is labelled as
+such in pool["meta"], which the card prints. As the weeks pass and people
+accumulate games the chosen floor climbs back to 50 on its own, and the
+previous-season fallback disappears position by position. Nobody has to
+remember to flip anything.
 
 The pool deliberately EXCLUDES low-game accounts. Pubs is full of abandoned
 profiles with a handful of games, and leaving them in would drag every
@@ -20,14 +32,37 @@ from concurrent.futures import ThreadPoolExecutor
 
 import ea
 
-# Minimum skater games to enter the pool. Everything below this is noise.
-MIN_POOL_GP = 50
-MIN_POOL_GLGP = 20  # goalies play fewer games, so they get their own floor
+# Game floors to enter the pool, strictest first. 50 is the standard: below it
+# the pool fills with abandoned accounts and a mediocre regular looks elite.
+# The looser floors exist ONLY for the first weeks of a new season, and each
+# position moves back up the list automatically as soon as it can.
+FLOORS = [50, 40, 30, 20, 15]
+GOALIE_FLOORS = [20, 16, 12, 10, 8]  # goalies play fewer games: their own ladder, same length
+# A position needs this many players at a floor before that floor counts. The
+# same number card.py uses to decide a pool is too thin to trust.
+MIN_POOL_N = 150
 
 # A player also has to have real time AT the position he's ranked in. Someone
 # with 300 games who took 4 shifts on D should not be sitting in the D pool
-# dragging it around.
-MIN_PRIMARY_GP = 40
+# dragging it around. Scales with the floor: 80% of it.
+def primary_floor(gp_floor: int) -> int:
+    return max(6, round(gp_floor * 0.8))
+
+# Kept for the pool.json keys older code reads; the per-position truth is in
+# pool["meta"]["positions"].
+MIN_POOL_GP = FLOORS[0]
+MIN_POOL_GLGP = GOALIE_FLOORS[0]
+MIN_PRIMARY_GP = primary_floor(FLOORS[0])
+
+# Labels for the card. The season being sampled, and what to call whatever
+# the previous pool.json was if it carries no label of its own.
+SEASON = os.getenv("POOL_SEASON", "NHL 27")
+PREV_SEASON = os.getenv("POOL_PREV_SEASON", "NHL 26")
+
+# A sample smaller than this is not a population, it is EA blocking us (the
+# GitHub runner's IP, a rate limit, an endpoint change). Abort without
+# touching pool.json rather than commit a curve built from 40 people.
+MIN_SAMPLE = int(os.getenv("POOL_MIN_SAMPLE", "500"))
 
 # Kept deliberately low; see fetch() for what happens otherwise.
 WORKERS = 4
@@ -129,7 +164,7 @@ def collect() -> list[dict]:
         # between requests -- the run takes longer but actually completes.
         for attempt in range(3):
             try:
-                return ea._all_hits(stem, fast=True)
+                return ea.sample_hits(stem)
             except Exception:
                 time.sleep(2 * (attempt + 1))
         return []
@@ -157,14 +192,17 @@ def primary_position(m: dict) -> tuple[str | None, float]:
     return best, best_gp
 
 
-def metrics(players: list[dict]) -> dict[str, dict[str, list[float]]]:
-    """Per-game rates bucketed by primary position.
+def metrics(players: list[dict], min_gp: int = MIN_POOL_GP,
+            min_glgp: int = MIN_POOL_GLGP) -> dict[str, dict[str, list[float]]]:
+    """Per-game rates bucketed by primary position, at the given floors.
 
     Returns {position: {metric: [values]}}. A player lands in exactly one
     bucket, so the pools stay independent and a percentile always means
     "among players who mainly play this position".
     """
     cols: dict[str, dict[str, list[float]]] = {}
+    min_primary = primary_floor(min_gp)
+    min_primary_g = primary_floor(min_glgp)
 
     METRICS = ("production", "scoring", "playmaking", "physicality", "discipline",
                "impact", "savepct", "gaa", "workload", "shutouts")
@@ -174,14 +212,14 @@ def metrics(players: list[dict]) -> dict[str, dict[str, list[float]]]:
 
     for m in players:
         pos, pos_gp = primary_position(m)
-        if not pos or pos_gp < MIN_PRIMARY_GP:
+        if not pos or pos_gp < (min_primary_g if pos == "G" else min_primary):
             continue
         gp = ea._num(m.get("gamesplayed"))
         glgp = ea._num(m.get("glgp"))
         skater_gp = max(gp - glgp, 0)
 
         if pos == "G":
-            if glgp < MIN_POOL_GLGP:
+            if glgp < min_glgp:
                 continue
             b = bucket("G")
             sv = ea._savepct(m)
@@ -195,7 +233,7 @@ def metrics(players: list[dict]) -> dict[str, dict[str, list[float]]]:
             b["shutouts"].append(ea._num(m.get("glso")) / glgp)
             continue
 
-        if skater_gp < MIN_POOL_GP:
+        if skater_gp < min_gp:
             continue
         goals = ea._num(m.get("skgoals"))
         assists = ea._num(m.get("skassists"))
@@ -235,6 +273,89 @@ def breakpoints(values: list[float]) -> list[float]:
 
 
 RAW = "players_raw.json"
+POOL = "pool.json"
+# The metric whose count decides whether a position's pool is big enough.
+GATE = {"G": "savepct"}
+
+
+def load_previous() -> dict:
+    """The pool.json being replaced -- the fallback for any position that
+    can't clear MIN_POOL_N yet this season."""
+    try:
+        with open(POOL) as f:
+            return json.load(f)
+    except Exception:
+        return {"breakpoints": {}, "counts": {}, "meta": {"positions": {}}}
+
+
+def assemble(players: list[dict], prev: dict) -> dict:
+    """Pick a floor per position, falling back to the previous pool.
+
+    Each position takes the STRICTEST floor that still yields MIN_POOL_N
+    players. "F" (all forwards) is built at the same floor as C, since it
+    exists to back up the thin forward positions. A position that clears no
+    floor keeps its previous bands, counts and floor, and its source label
+    stays whatever it was (last season's, or the season before that if last
+    season never cleared either -- it can chain, and the label stays honest).
+    """
+    ladder = list(zip(FLOORS, GOALIE_FLOORS))
+    by_floor = {f: metrics(players, min_gp=f, min_glgp=g) for f, g in ladder}
+    prev_pos = prev.get("meta", {}).get("positions", {})
+    out = {"min_pool_gp": MIN_POOL_GP, "min_pool_glgp": MIN_POOL_GLGP,
+           "min_primary_gp": MIN_PRIMARY_GP, "counts": {}, "breakpoints": {},
+           "meta": {"built": time.strftime("%Y-%m-%d"), "season": SEASON, "positions": {}}}
+
+    def clears(pos, f):
+        cols = by_floor[f].get(pos, {})
+        return cols if len(cols.get(GATE.get(pos, "production"), [])) >= MIN_POOL_N else None
+
+    positions = sorted(set(prev.get("breakpoints", {})) | {p for c in by_floor.values() for p in c})
+    # C first so F can follow its floor
+    positions.sort(key=lambda p: (p != "C", p))
+    chosen_c = None
+    for pos in positions:
+        pick = None
+        if pos == "F" and chosen_c is not None:
+            cols = clears("F", chosen_c)
+            if cols:
+                pick = (chosen_c, cols)
+        if pick is None:
+            for f, g in ladder:
+                cols = clears(pos, f)
+                if cols:
+                    pick = (g if pos == "G" else f, cols)
+                    break
+        if pick:
+            floor, cols = pick
+            if pos == "C":
+                chosen_c = floor
+            out["counts"][pos] = {k: len(v) for k, v in cols.items() if v}
+            out["breakpoints"][pos] = {k: breakpoints(v) for k, v in cols.items() if v}
+            out["meta"]["positions"][pos] = {
+                "floor": floor, "source": SEASON,
+                "n": len(cols.get(GATE.get(pos, "production"), []))}
+        elif pos in prev.get("breakpoints", {}):
+            out["counts"][pos] = prev.get("counts", {}).get(pos, {})
+            out["breakpoints"][pos] = prev["breakpoints"][pos]
+            old = prev_pos.get(pos, {})
+            default_floor = prev.get("min_pool_glgp" if pos == "G" else "min_pool_gp", 50)
+            out["meta"]["positions"][pos] = {
+                "floor": old.get("floor", default_floor),
+                "source": old.get("source", PREV_SEASON),
+                "n": old.get("n", max(out["counts"][pos].values() or [0])),
+            }
+    return out
+
+
+def summary(pool: dict) -> str:
+    """One line for a commit message: 'C 30+ (412) · RW NHL 26 · G NHL 26'."""
+    bits = []
+    for pos, info in sorted(pool["meta"]["positions"].items()):
+        if info["source"] == pool["meta"]["season"]:
+            bits.append(f"{pos} {info['floor']}+ ({info['n']})")
+        else:
+            bits.append(f"{pos} {info['source']}")
+    return " · ".join(bits)
 
 
 def main():
@@ -248,35 +369,24 @@ def main():
     else:
         print(f"sampling {len(STEMS)} stems...", flush=True)
         players = collect()
+        if len(players) < MIN_SAMPLE:
+            print(f"ABORT: only {len(players)} players sampled (need {MIN_SAMPLE}). "
+                  "EA is blocking or rate-limiting this machine; pool.json untouched.",
+                  file=sys.stderr)
+            sys.exit(2)
         with open(RAW, "w") as f:
             json.dump(players, f)
         print(f"collected {len(players)} unique players -> {RAW}", flush=True)
 
-    cols = metrics(players)
-    pool = {
-        "min_pool_gp": MIN_POOL_GP,
-        "min_pool_glgp": MIN_POOL_GLGP,
-        "min_primary_gp": MIN_PRIMARY_GP,
-        "counts": {pos: {k: len(v) for k, v in mets.items() if v} for pos, mets in cols.items()},
-        "breakpoints": {pos: {k: breakpoints(v) for k, v in mets.items() if v}
-                        for pos, mets in cols.items()},
-    }
-    thin = []
-    for pos in sorted(cols):
-        for k, v in cols[pos].items():
-            if not v:
-                continue
-            s = sorted(v)
-            print(f"  {pos:<3} {k:<12} n={len(v):<5} p10={s[len(s)//10]:.2f} "
-                  f"p50={s[len(s)//2]:.2f} p90={s[len(s)*9//10]:.2f}")
-            if len(v) < 150:
-                thin.append(f"{pos}/{k} (n={len(v)})")
-    if thin:
-        print(f"WARNING: thin pools, percentiles will be coarse: {', '.join(thin)}", file=sys.stderr)
+    prev = load_previous()
+    pool = assemble(players, prev)
+    for pos in sorted(pool["meta"]["positions"]):
+        info = pool["meta"]["positions"][pos]
+        print(f"  {pos:<3} {info['source']:<7} floor={info['floor']:<3} n={info['n']}")
 
-    with open("pool.json", "w") as f:
+    with open(POOL, "w") as f:
         json.dump(pool, f)
-    print("wrote pool.json")
+    print(f"wrote {POOL}: {summary(pool)}")
 
 
 if __name__ == "__main__":
