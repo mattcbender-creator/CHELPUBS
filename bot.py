@@ -789,7 +789,44 @@ async def pubscout(interaction: discord.Interaction, gamertag: str,
 # rate-limit stops it in a minute rather than getting this IP banned -- and
 # a failed rebuild leaves the previous pool exactly as it was.
 POOL_REBUILD_DAYS = float(os.getenv("POOL_REBUILD_DAYS", "7"))
+# Scheduled rebuilds only start inside this UTC hour window (06-11 UTC is
+# 2-7am Eastern: the quietest the server gets) and never more than once a
+# day, whatever happened last time. The attempt marker lives next to the
+# pool on the volume, so a redeploy can't reset the clock and re-trigger
+# a scrape that EA just throttled.
+POOL_REBUILD_HOURS_UTC = range(int(os.getenv("POOL_REBUILD_HOUR_FROM", "6")),
+                               int(os.getenv("POOL_REBUILD_HOUR_TO", "11")))
+POOL_ATTEMPT_GAP_HOURS = float(os.getenv("POOL_ATTEMPT_GAP_HOURS", "20"))
+POOL_ATTEMPT_MARK = card.POOL_PATH + ".attempt"
 _pool_lock = asyncio.Lock()
+
+
+def _last_attempt() -> float:
+    try:
+        return float(open(POOL_ATTEMPT_MARK).read().strip())
+    except Exception:
+        return 0.0
+
+
+def _mark_attempt() -> None:
+    try:
+        with open(POOL_ATTEMPT_MARK, "w") as f:
+            f.write(str(time.time()))
+    except Exception as e:
+        print(f"[pool] couldn't write attempt marker: {e}", flush=True)
+
+
+def rebuild_due(now: float | None = None) -> str | None:
+    """Why a scheduled rebuild should run now, or None if it shouldn't."""
+    import datetime as _dt
+    now = time.time() if now is None else now
+    if pool_age_days() < POOL_REBUILD_DAYS:
+        return None
+    if now - _last_attempt() < POOL_ATTEMPT_GAP_HOURS * 3600:
+        return None
+    if _dt.datetime.fromtimestamp(now, _dt.timezone.utc).hour not in POOL_REBUILD_HOURS_UTC:
+        return None
+    return f"scheduled: pool {pool_age_days():.0f} days old"
 
 
 def pool_age_days() -> float:
@@ -807,6 +844,7 @@ async def rebuild_pool(reason: str) -> str:
     if _pool_lock.locked():
         return "a rebuild is already running"
     async with _pool_lock:
+        _mark_attempt()
         print(f"[pool] rebuild starting ({reason}); pool is {pool_age_days():.0f} days old", flush=True)
         t0 = time.monotonic()
         try:
@@ -829,9 +867,10 @@ async def rebuild_pool(reason: str) -> str:
 async def pool_rebuild_loop():
     await client.wait_until_ready()
     while not client.is_closed():
-        if pool_age_days() >= POOL_REBUILD_DAYS:
-            await rebuild_pool("scheduled")
-        await asyncio.sleep(3600)
+        why = rebuild_due()
+        if why:
+            await rebuild_pool(why)
+        await asyncio.sleep(900)
 
 
 @tree.command(name="rebuild-pool", description="Re-sample EA and rebuild the percentile pool now (admins)")

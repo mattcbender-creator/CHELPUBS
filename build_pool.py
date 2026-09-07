@@ -28,7 +28,6 @@ import json
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 import ea
 
@@ -64,9 +63,13 @@ PREV_SEASON = os.getenv("POOL_PREV_SEASON", "NHL 26")
 # than write a curve built from 40 people.
 MIN_SAMPLE = int(os.getenv("POOL_MIN_SAMPLE", "500"))
 
-# Kept deliberately low; see fetch() for what happens otherwise.
-WORKERS = 4
-THROTTLE = 0.15  # seconds between requests per worker
+# One request at a time, ~0.75s apart: 1,136 stems x 2 calls is ~30-40
+# minutes. Slow is the point -- see collect(). Env-overridable for tuning
+# from Railway without a deploy.
+PAUSE = float(os.getenv("POOL_PAUSE", "0.75"))
+# On a 403, sleep this long and try the stem once more; a second 403 in a
+# row means the IP is throttled and the run stops to protect it.
+BACKOFF_403 = float(os.getenv("POOL_BACKOFF_403", "180"))
 
 # Percentiles are computed per position, because the same rate means different
 # things at different spots -- 1.4 points a game is ordinary for a centre and
@@ -155,52 +158,60 @@ swip swir swis swit swiv swol swoo swop swor sydn sykes sylv symb symo sync synd
 
 
 # If this many stems in a row fail every call, EA is not answering this
-# machine at all. Stop, instead of retrying 1,136 stems with backoff for the
-# better part of an hour to learn the same thing.
-DEAD_STEMS = int(os.getenv("POOL_DEAD_STEMS", "20"))
+# machine at all. Stop, instead of retrying a thousand stems to learn the
+# same thing.
+DEAD_STEMS = int(os.getenv("POOL_DEAD_STEMS", "10"))
 
 
 class Blocked(Exception):
     pass
 
 
-def collect() -> list[dict]:
+def collect(pause: float = PAUSE) -> list[dict]:
+    """Sample the population, one request at a time.
+
+    The first version of this scrape ran 4 workers x 4 concurrent calls and
+    EA's rate limit answered 403 to everything after ~70 requests -- and
+    since the bot shares the IP, that took /pubscout down too. The August
+    run that completed used one call per stem at low concurrency. So:
+    serial, paced, and the moment EA says 403 we wait BACKOFF_403 and try
+    once more; a second 403 ends the run. The run takes 30-40 minutes and
+    the bot keeps answering commands the whole time (it's a worker thread).
+    """
     seen, out = set(), []
-    dead_run = [0]  # consecutive stems where every EA call failed
-
-    def fetch(stem):
-        # EA rate-limits hard: a 12-worker run over this stem list earned a
-        # 403 for the whole machine partway through, and every request after
-        # it silently returned nothing. Keep the concurrency low and pause
-        # between requests -- the run takes longer but actually completes.
-        if dead_run[0] >= DEAD_STEMS:
-            return None
-        for attempt in range(3):
+    dead_run = 0
+    for i, stem in enumerate(STEMS, 1):
+        hits = None
+        for attempt in range(2):
             try:
-                hits = ea.sample_hits(stem)
-                dead_run[0] = 0
-                return hits
-            except Exception:
-                time.sleep(2 * (attempt + 1))
-        dead_run[0] += 1
-        return None
-
-    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        for i, hits in enumerate(pool.map(fetch, STEMS), 1):
-            time.sleep(THROTTLE)
-            if hits is None:
-                if dead_run[0] >= DEAD_STEMS:
-                    raise Blocked(f"{DEAD_STEMS} stems in a row failed every EA call "
-                                  f"(after {i} stems, {len(out)} players) -- EA is "
-                                  "blocking or rate-limiting this machine")
-                continue
-            for m in hits:
-                name = str(m.get("name") or "").lower()
-                if name and name not in seen:
-                    seen.add(name)
-                    out.append(m)
-            if i % 50 == 0:
-                print(f"  {i}/{len(STEMS)} stems -> {len(out)} unique players", flush=True)
+                hits = ea.sample_hits(stem, pause=pause)
+                break
+            except ea.RateLimited as e:
+                if attempt:
+                    raise Blocked(f"EA rate-limited this IP twice in a row ({e}) after "
+                                  f"{i} stems, {len(out)} players -- stopping to protect it")
+                print(f"[pool] {e}; backing off {BACKOFF_403:.0f}s", flush=True)
+                time.sleep(BACKOFF_403)
+            except Exception as e:
+                print(f"[pool] stem {stem!r} failed: {type(e).__name__}: {e}", flush=True)
+                time.sleep(pause * 4)
+                break
+        if hits is None:
+            dead_run += 1
+            if dead_run >= DEAD_STEMS:
+                raise Blocked(f"{DEAD_STEMS} stems in a row failed every EA call "
+                              f"(after {i} stems, {len(out)} players) -- EA is not "
+                              "answering this machine")
+            continue
+        dead_run = 0
+        for m in hits:
+            name = str(m.get("name") or "").lower()
+            if name and name not in seen:
+                seen.add(name)
+                out.append(m)
+        if i % 50 == 0:
+            print(f"  {i}/{len(STEMS)} stems -> {len(out)} unique players", flush=True)
+        time.sleep(pause)
     return out
 
 

@@ -135,19 +135,50 @@ def _search_platforms(query: str, timeout: int = 20) -> tuple[list, int, int]:
     return _search_many(_case_variants(query), timeout=timeout)
 
 
-def sample_hits(stem: str, timeout: int = 8) -> list:
-    """Population sampling for build_pool.py: two casings, not five.
+class RateLimited(EAUnavailable):
+    """EA answered 403 -- the IP is being throttled. Back off, don't retry."""
 
-    A lookup has to find one specific player, so it is worth every spelling.
-    A population sample only has to be representative, and the case-variant
-    change turned the 1,136-stem scrape into ~11,000 requests -- against an
-    API that banned a whole machine partway through the last run. Lowercase
-    plus Capitalized covers how most tags actually start, at 40% of the cost.
-    Raises EAUnavailable if every call failed, so a blocked scraper aborts
-    instead of quietly sampling nothing.
+
+# Population sampling only asks one platform: members/search on common-gen4
+# has returned HTTP 400 on every call in production, so asking it is a
+# wasted request against a rate limit.
+SAMPLE_PLATFORMS = [p.strip() for p in
+                    os.getenv("EA_SAMPLE_PLATFORMS", "common-gen5").split(",") if p.strip()]
+
+
+def sample_hits(stem: str, pause: float = 0.75, timeout: int = 15) -> list:
+    """Population sampling for build_pool.py: SERIAL, and slow on purpose.
+
+    The lookup path fires every casing on every platform concurrently,
+    which is right for finding one player fast. Doing that from a scrape
+    put 16 requests in flight at once and EA's Akamai front answered 403 to
+    the whole machine within seconds -- taking the live bot's lookups down
+    with it. So this makes ONE request at a time, one platform, two casings
+    (lower + Capitalized cover how most tags start), with a pause between.
+    A 403 raises RateLimited straight away so the caller can back off
+    instead of hammering; any other total failure raises EAUnavailable.
     """
-    hits, ok, failed = _search_many([stem.lower(), stem.capitalize()], timeout=timeout)
-    if failed and not ok:
+    hits, seen, failed = [], set(), 0
+    calls = [(q, p) for q in (stem.lower(), stem.capitalize()) for p in SAMPLE_PLATFORMS]
+    for i, (q, platform) in enumerate(calls):
+        if i:
+            time.sleep(pause)
+        try:
+            data = _get(f"{BASE}/members/search?platform={platform}"
+                        f"&memberName={quote(q)}", timeout=timeout)
+        except Exception as e:
+            if "403" in str(e):
+                raise RateLimited(f"403 on {q!r}/{platform}") from e
+            print(f"[ea] sample FAILED q={q!r} platform={platform}: {type(e).__name__}: {e}")
+            failed += 1
+            continue
+        for m in data.get("members", []) or []:
+            ident = (str(m.get("name")), platform)
+            if ident not in seen:
+                seen.add(ident)
+                m["_platform"] = platform
+                hits.append(m)
+    if failed == len(calls):
         raise EAUnavailable(f"all {failed} EA calls failed for stem {stem!r}")
     return hits
 
