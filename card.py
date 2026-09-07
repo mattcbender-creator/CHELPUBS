@@ -197,16 +197,33 @@ def _fmt(metric: str, v: float) -> str:
     return f"{v:.2f}"
 
 
+# Where the live pool lives. On Railway this is a file on a persistent volume
+# that the bot rebuilds itself (see bot.py); the pool.json in the repo is the
+# fallback for a fresh volume and for local runs.
+REPO_POOL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pool.json")
+POOL_PATH = os.getenv("POOL_PATH") or REPO_POOL
+
+
 def pool() -> dict:
     global _pool
     if _pool is None:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pool.json")
-        try:
-            with open(path) as f:
-                _pool = json.load(f)
-        except Exception:
+        for path in (POOL_PATH, REPO_POOL):
+            try:
+                with open(path) as f:
+                    _pool = json.load(f)
+                break
+            except Exception:
+                continue
+        else:
             _pool = {"breakpoints": {}, "counts": {}}
     return _pool
+
+
+def reload_pool() -> dict:
+    """Drop the cached pool so the next card reads the file again."""
+    global _pool
+    _pool = None
+    return pool()
 
 
 _logo = None

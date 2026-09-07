@@ -1,9 +1,9 @@
 """Build the percentile pool used by the minicard.
 
-Runs weekly from .github/workflows/rebuild-pool.yml (or locally); commits the
-result. Railway containers are ephemeral, so sampling at boot would repeat
-this work on every deploy for no benefit -- the shape of the population
-barely moves week to week.
+The bot runs this itself, on Railway: weekly, and at boot when the pool on
+its volume is older than a week (bot.py, pool_rebuild_loop). EA's Akamai
+front blocks datacenter IPs like GitHub's runners, but it answers Railway --
+that is the IP the bot already talks to it from. From a shell:
 
     python build_pool.py            # writes pool.json (reuses players_raw.json)
     python build_pool.py --refresh  # re-samples EA first
@@ -59,9 +59,9 @@ MIN_PRIMARY_GP = primary_floor(FLOORS[0])
 SEASON = os.getenv("POOL_SEASON", "NHL 27")
 PREV_SEASON = os.getenv("POOL_PREV_SEASON", "NHL 26")
 
-# A sample smaller than this is not a population, it is EA blocking us (the
-# GitHub runner's IP, a rate limit, an endpoint change). Abort without
-# touching pool.json rather than commit a curve built from 40 people.
+# A sample smaller than this is not a population, it is EA blocking us (a
+# rate limit, an endpoint change). Abort without touching the pool rather
+# than write a curve built from 40 people.
 MIN_SAMPLE = int(os.getenv("POOL_MIN_SAMPLE", "500"))
 
 # Kept deliberately low; see fetch() for what happens otherwise.
@@ -300,11 +300,11 @@ POOL = "pool.json"
 GATE = {"G": "savepct"}
 
 
-def load_previous() -> dict:
-    """The pool.json being replaced -- the fallback for any position that
+def load_previous(path: str = POOL) -> dict:
+    """The pool being replaced -- the fallback for any position that
     can't clear MIN_POOL_N yet this season."""
     try:
-        with open(POOL) as f:
+        with open(path) as f:
             return json.load(f)
     except Exception:
         return {"breakpoints": {}, "counts": {}, "meta": {"positions": {}}}
@@ -380,10 +380,33 @@ def summary(pool: dict) -> str:
     return " · ".join(bits)
 
 
+class TooSmall(Exception):
+    pass
+
+
+def rebuild(prev_path: str = POOL, out_path: str = POOL, players: list | None = None) -> dict:
+    """Sample EA (unless players are given), assemble against the previous
+    pool at prev_path, write out_path. Raises Blocked / TooSmall instead of
+    writing anything when the sample isn't a population. This is what the
+    bot calls on its weekly timer; main() is the same thing from a shell."""
+    if players is None:
+        players = collect()
+        if len(players) < MIN_SAMPLE:
+            raise TooSmall(f"only {len(players)} players sampled (need {MIN_SAMPLE}) -- "
+                           "EA is blocking or rate-limiting this machine")
+    pool = assemble(players, load_previous(prev_path))
+    tmp = out_path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(pool, f)
+    os.replace(tmp, out_path)   # never leave a half-written pool for the card to read
+    return pool
+
+
 def main():
     # Sampling is the expensive, rate-limited part, so the raw pull is cached.
     # Re-deriving pools from it (new buckets, new floors) then costs nothing.
     # Pass --refresh to force a new sample.
+    players = None
     if "--refresh" not in sys.argv and os.path.exists(RAW):
         with open(RAW) as f:
             players = json.load(f)
@@ -393,25 +416,21 @@ def main():
         try:
             players = collect()
         except Blocked as e:
-            print(f"ABORT: {e}; pool.json untouched.", file=sys.stderr)
+            print(f"ABORT: {e}; {POOL} untouched.", file=sys.stderr)
             sys.exit(2)
         if len(players) < MIN_SAMPLE:
             print(f"ABORT: only {len(players)} players sampled (need {MIN_SAMPLE}). "
-                  "EA is blocking or rate-limiting this machine; pool.json untouched.",
+                  f"EA is blocking or rate-limiting this machine; {POOL} untouched.",
                   file=sys.stderr)
             sys.exit(2)
         with open(RAW, "w") as f:
             json.dump(players, f)
         print(f"collected {len(players)} unique players -> {RAW}", flush=True)
 
-    prev = load_previous()
-    pool = assemble(players, prev)
+    pool = rebuild(players=players)
     for pos in sorted(pool["meta"]["positions"]):
         info = pool["meta"]["positions"][pos]
         print(f"  {pos:<3} {info['source']:<7} floor={info['floor']:<3} n={info['n']}")
-
-    with open(POOL, "w") as f:
-        json.dump(pool, f)
     print(f"wrote {POOL}: {summary(pool)}")
 
 

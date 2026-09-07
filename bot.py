@@ -4,12 +4,14 @@ import io
 import os
 import random
 import re
+import time
 import certifi
 os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
+import build_pool
 import card
 import ea
 import voice as vc
@@ -778,6 +780,72 @@ async def pubscout(interaction: discord.Interaction, gamertag: str,
         await interaction.followup.send(files=files)
 
 
+# ------------------------------------------------------------ pool rebuild
+# The percentile pool rebuilds itself here, on the bot, because this is the
+# one machine EA reliably answers. Weekly, plus at boot if the pool on the
+# volume is older than that (a fresh volume starts from the repo's pool.json,
+# which is last season's, so the first boot rebuilds straight away). The
+# scrape runs in a worker thread with low concurrency and a fail-fast, so a
+# rate-limit stops it in a minute rather than getting this IP banned -- and
+# a failed rebuild leaves the previous pool exactly as it was.
+POOL_REBUILD_DAYS = float(os.getenv("POOL_REBUILD_DAYS", "7"))
+_pool_lock = asyncio.Lock()
+
+
+def pool_age_days() -> float:
+    built = card.pool().get("meta", {}).get("built")
+    try:
+        import datetime as _dt
+        d = _dt.date.fromisoformat(built)
+        return (_dt.date.today() - d).days
+    except Exception:
+        return 1e9   # unstamped or unreadable -> treat as ancient
+
+
+async def rebuild_pool(reason: str) -> str:
+    """Run the scrape off the event loop; swap the pool in on success."""
+    if _pool_lock.locked():
+        return "a rebuild is already running"
+    async with _pool_lock:
+        print(f"[pool] rebuild starting ({reason}); pool is {pool_age_days():.0f} days old", flush=True)
+        t0 = time.monotonic()
+        try:
+            pool = await asyncio.to_thread(build_pool.rebuild, card.POOL_PATH, card.POOL_PATH)
+        except (build_pool.Blocked, build_pool.TooSmall) as e:
+            msg = f"rebuild aborted, previous pool kept: {e}"
+            print(f"[pool] {msg}", flush=True)
+            return msg
+        except Exception as e:
+            msg = f"rebuild failed, previous pool kept: {type(e).__name__}: {e}"
+            print(f"[pool] {msg}", flush=True)
+            return msg
+        card.reload_pool()
+        msg = (f"rebuilt in {(time.monotonic() - t0) / 60:.0f} min -> "
+               f"{build_pool.summary(pool)}")
+        print(f"[pool] {msg}", flush=True)
+        return msg
+
+
+async def pool_rebuild_loop():
+    await client.wait_until_ready()
+    while not client.is_closed():
+        if pool_age_days() >= POOL_REBUILD_DAYS:
+            await rebuild_pool("scheduled")
+        await asyncio.sleep(3600)
+
+
+@tree.command(name="rebuild-pool", description="Re-sample EA and rebuild the percentile pool now (admins)")
+@app_commands.default_permissions(administrator=True)
+async def rebuild_pool_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    p = card.pool().get("meta", {})
+    await interaction.followup.send(
+        f"Rebuilding. Current pool: {p.get('season', '?')}, built {p.get('built', '?')}. "
+        "This takes a while; I'll post here when it's done.", ephemeral=True)
+    msg = await rebuild_pool(f"/rebuild-pool by {interaction.user}")
+    await interaction.followup.send(f"Pool: {msg}"[:2000], ephemeral=True)
+
+
 HELP = """**ChelScout Pubs**
 
 **Ask a voice something** -- one question in, a clip back. Same for all six.
@@ -843,5 +911,10 @@ async def on_ready():
     else:
         await tree.sync()
     print(f"Logged in as {client.user} | model={MODEL}")
+    p = card.pool().get("meta", {})
+    print(f"[pool] using {card.POOL_PATH}: {p.get('season', 'unstamped')} built "
+          f"{p.get('built', '?')} ({pool_age_days():.0f} days old)", flush=True)
+    if not getattr(client, "_pool_task", None):
+        client._pool_task = client.loop.create_task(pool_rebuild_loop())
 
 client.run(DISCORD_BOT_TOKEN)
