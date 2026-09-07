@@ -651,3 +651,163 @@ def format_stats(m: dict) -> str:
         lines += ["", "GOALIE STATS: never played goalie."]
 
     return "\n".join(lines)
+
+
+# ------------------------------------------------------------------ clubs
+# Endpoints confirmed from a working third-party client (eliashussary/chelstats):
+#   clubs/search?platform=&clubName=   -> dict keyed by clubId: {name, record,
+#                                         currentDivision, clubId, ...}
+#   members/stats?platform=&clubId=    -> {"members": [same shape as members/search]}
+#   clubs/stats?platform=&clubIds=     -> season totals (wins/losses/otl/goals/...)
+#   clubs/matches?platform=&clubIds=&matchType=club_private&maxResultCount=N
+# The exact field names on stats/matches vary between NHL releases, so those
+# two are parsed defensively and the card renders without them if they don't
+# fit. Every response's top-level keys are logged once so a shape change can
+# be read straight off the Railway log.
+
+_club_cache: dict[str, tuple[float, object]] = {}
+_logged_shapes: set[str] = set()
+
+
+def _log_shape(tag: str, data) -> None:
+    if tag in _logged_shapes:
+        return
+    _logged_shapes.add(tag)
+    try:
+        if isinstance(data, dict):
+            first = next(iter(data.values()), None) if data else None
+            print(f"[ea] {tag} shape: dict keys={list(data)[:8]} "
+                  f"first={list(first)[:12] if isinstance(first, dict) else type(first).__name__}")
+        elif isinstance(data, list):
+            print(f"[ea] {tag} shape: list[{len(data)}] "
+                  f"first={list(data[0])[:12] if data and isinstance(data[0], dict) else '-'}")
+        else:
+            print(f"[ea] {tag} shape: {type(data).__name__}")
+    except Exception:
+        pass
+
+
+def _as_records(data) -> list[dict]:
+    """clubs/* answers come back as a dict keyed by clubId, a bare list, or
+    wrapped in a one-key envelope. Flatten all of them to a list of dicts."""
+    if isinstance(data, list):
+        return [d for d in data if isinstance(d, dict)]
+    if isinstance(data, dict):
+        if data and all(isinstance(v, dict) for v in data.values()):
+            out = []
+            for k, v in data.items():
+                v = dict(v)
+                v.setdefault("clubId", k)
+                out.append(v)
+            return out
+        for key in ("clubs", "members", "matches", "data"):
+            if isinstance(data.get(key), (list, dict)):
+                return _as_records(data[key])
+        return [data] if data else []
+    return []
+
+
+def _club_get(tag: str, url: str, ttl: int = 120, timeout: int = 15):
+    now = time.time()
+    hit = _club_cache.get(url)
+    if hit and now - hit[0] < ttl:
+        return hit[1]
+    data = _get(url, timeout=timeout)
+    _log_shape(tag, data)
+    _club_cache[url] = (now, data)
+    return data
+
+
+def _search_clubs_sync(name: str, timeout: int = 15) -> tuple[list, int, int]:
+    """One club-name query across every platform. Returns (clubs, ok, failed)."""
+    q = name.strip()
+    if len(q) < 3:
+        return [], 0, 0
+
+    def one(platform):
+        try:
+            data = _club_get("clubs/search",
+                             f"{BASE}/clubs/search?platform={platform}&clubName={quote(q)}",
+                             timeout=timeout)
+            return platform, _as_records(data)
+        except Exception as e:
+            print(f"[ea] club search FAILED q={q!r} platform={platform}: {type(e).__name__}: {e}")
+            return platform, None
+
+    out, seen, ok, failed = [], set(), 0, 0
+    with ThreadPoolExecutor(max_workers=len(PLATFORMS)) as pool:
+        for platform, clubs in pool.map(one, PLATFORMS):
+            if clubs is None:
+                failed += 1
+                continue
+            ok += 1
+            for c in clubs:
+                cid = str(c.get("clubId") or "")
+                if not cid or (cid, platform) in seen:
+                    continue
+                seen.add((cid, platform))
+                c["_platform"] = platform
+                # Some releases nest the display fields under clubInfo.
+                info = c.get("clubInfo") if isinstance(c.get("clubInfo"), dict) else {}
+                c.setdefault("name", info.get("name"))
+                out.append(c)
+    return out, ok, failed
+
+
+def _club_score(c: dict, want: str) -> tuple:
+    name = str(c.get("name") or "").lower()
+    return (name == want, name.startswith(want), want in name,
+            round(difflib.SequenceMatcher(None, name, want).ratio(), 2))
+
+
+async def search_clubs(name: str, limit: int = 25) -> list[dict]:
+    """Ranked club candidates. Raises EAUnavailable if every platform failed."""
+    clubs, ok, failed = await asyncio.to_thread(_search_clubs_sync, name)
+    if failed and not ok:
+        raise EAUnavailable(f"all {failed} EA club-search calls failed for {name!r}")
+    want = name.strip().lower()
+    ranked = sorted(clubs, key=lambda c: _club_score(c, want), reverse=True)
+    return ranked[:limit]
+
+
+def _club_detail_sync(club_id: str, platform: str) -> dict:
+    """Roster, season stats and recent matches for one club, concurrently.
+    Only the roster is required; the other two are None if EA won't give
+    them, and the card renders without them."""
+    cid = quote(str(club_id))
+
+    def members():
+        data = _club_get("members/stats",
+                         f"{BASE}/members/stats?platform={platform}&clubId={cid}")
+        ms = _as_records(data)
+        for m in ms:
+            m["_platform"] = platform
+        return ms
+
+    def stats():
+        try:
+            data = _club_get("clubs/stats",
+                             f"{BASE}/clubs/stats?platform={platform}&clubIds={cid}&clubId={cid}")
+            recs = _as_records(data)
+            return recs[0] if recs else None
+        except Exception as e:
+            print(f"[ea] clubs/stats failed for {club_id}: {type(e).__name__}: {e}")
+            return None
+
+    def matches():
+        try:
+            data = _club_get("clubs/matches",
+                             f"{BASE}/clubs/matches?platform={platform}&clubIds={cid}"
+                             f"&matchType=club_private&maxResultCount=10")
+            return _as_records(data)
+        except Exception as e:
+            print(f"[ea] clubs/matches failed for {club_id}: {type(e).__name__}: {e}")
+            return []
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        fm, fs, fx = pool.submit(members), pool.submit(stats), pool.submit(matches)
+        return {"members": fm.result(), "stats": fs.result(), "matches": fx.result()}
+
+
+async def club_detail(club_id: str, platform: str) -> dict:
+    return await asyncio.to_thread(_club_detail_sync, club_id, platform)

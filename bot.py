@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 import build_pool
 import card
+import club as clubmod
 import ea
 import voice as vc
 
@@ -780,7 +781,160 @@ async def pubscout(interaction: discord.Interaction, gamertag: str,
         await interaction.followup.send(files=files)
 
 
-# ------------------------------------------------------------ pool rebuild
+# --------------------------------------------------------------- clubscout
+CLUB_READ_PROMPT = """You write the headline read at the TOP of a club's scouting
+card -- two or three sentences saying what kind of team this is and whether
+you'd want to play them. The card shows the record, goals and the roster
+right under you, so don't read numbers back; say what they MEAN.
+
+40-55 words, no markdown, no bullets. Blunt, readable, not a bit.
+
+YOU MUST NOT CONTRADICT THE ROSTER SHAPE GRADES -- they're printed on the
+card. Use their exact words (elite / stud / solid / mid / weak / bender /
+shitter) and no other rating vocabulary. Never invent a stat, never do
+arithmetic, never comment on chemistry, coaching or attitude -- there is no
+data for those. If the record or goals are missing, don't mention them."""
+
+
+async def club_autocomplete(interaction: discord.Interaction, current: str):
+    if not current or len(current.strip()) < 3:
+        return []
+    try:
+        clubs = await asyncio.wait_for(ea.search_clubs(current, limit=25), timeout=2.5)
+    except (asyncio.TimeoutError, Exception):
+        return []
+    out = []
+    for c in clubs:
+        name = str(c.get("name") or "")
+        if not name:
+            continue
+        rec = f" — {c['record']}" if c.get("record") else ""
+        div = f", div {c['currentDivision']}" if c.get("currentDivision") not in (None, "") else ""
+        out.append(app_commands.Choice(name=f"{name}{rec}{div}"[:100], value=name[:100]))
+    return out[:25]
+
+
+async def _club_voice_file(voice, block: str) -> tuple[discord.File | None, str | None]:
+    """A clip reading the club block in the chosen voice, or (None, error).
+    Same voices and length rules as /pubscout; the prompts get told it's a
+    team, not a player, since the scout prompts were written for one guy."""
+    team_note = ("This report is about a CLUB (a whole team and its roster), not one player. "
+                 "Talk about the team; name a player or two from the roster if it helps.")
+    try:
+        if voice.value == "narrator":
+            with_kid = random.random() < vc.NARRATOR_KID_PROB
+            prompt = vc.NARRATOR_SCOUT_PROMPT if with_kid else vc.NARRATOR_SCOUT_SOLO_PROMPT
+            prompt = f"{prompt}\n\n{team_note}\n\n{vc.narrator_length_rule(with_kid)}"
+            msgs = [{"role": "system", "content": prompt}, {"role": "user", "content": block}]
+            resp = await call_llm(messages=msgs, max_tokens=260, temperature=0.9)
+            raw = (resp.choices[0].message.content or "").strip()
+            if vc.narrator_needs_retry(raw, with_kid):
+                fix = msgs + [{"role": "assistant", "content": raw},
+                              {"role": "user", "content": vc.narrator_retry_note(with_kid)}]
+                resp = await call_llm(messages=fix, max_tokens=260, temperature=0.95)
+                retry = (resp.choices[0].message.content or "").strip()
+                if not vc.narrator_needs_retry(retry, with_kid):
+                    raw = retry
+                elif with_kid:
+                    turns = vc.parse_narrator_script(raw)
+                    raw = f"NARRATOR: {turns[0][1]}" if turns else raw
+            audio, _ = await vc.speak_narrator(raw, max_words=vc.narrator_word_cap(with_kid))
+            log_clip("narrator", " ".join(ln for _, ln in vc.parse_narrator_script(raw)), audio)
+            return discord.File(io.BytesIO(audio), filename=f"{CLIP_BRAND}-clubscout-narrator.mp3"), None
+        prompt_fn, vid_fn, ramped, max_words, keep_er = VOICES[voice.value]
+        sys_prompt = f"{prompt_fn()}\n\n{team_note}"
+        rule = vc.length_rule(voice.value)
+        if rule:
+            sys_prompt = f"{sys_prompt}\n\n{rule}"
+        resp = await call_llm(messages=[{"role": "system", "content": sys_prompt},
+                                        {"role": "user", "content": block}],
+                              max_tokens=220, temperature=0.9)
+        script = (resp.choices[0].message.content or "").strip()
+        cap = min(max_words, vc.word_cap(voice.value))
+        if ramped:
+            audio, _ = await vc.speak_ramped(
+                script, vid_fn(), vc.TORTS_SPEED_START, vc.TORTS_SPEED_END,
+                end_gain=vc.TORTS_GAIN_END, steps=vc.TORTS_RAMP_STEPS,
+                temp_start=vc.TORTS_TTS_TEMP_START, temp_end=vc.TORTS_TTS_TEMP_END, max_words=cap)
+        else:
+            audio, _ = await vc.speak(script, voice_id=vid_fn(), max_words=cap, keep_er=keep_er)
+        log_clip(voice.value, script, audio, keep_er=keep_er)
+        return discord.File(io.BytesIO(audio), filename=f"{CLIP_BRAND}-clubscout-{voice.value}.mp3"), None
+    except Exception as e:
+        print(f"[clubscout] voice failed: {type(e).__name__}: {e}")
+        return None, f"{type(e).__name__}: {e}"
+
+
+@tree.command(name="clubscout", description="Scout an EA NHL club: record, roster shape, recent form, roster")
+@app_commands.describe(club="Club name as it appears in-game",
+                       voice="Optionally have the report read out loud")
+@app_commands.autocomplete(club=club_autocomplete)
+@app_commands.choices(voice=[
+    app_commands.Choice(name="Canadian hockey guy", value="buddy"),
+    app_commands.Choice(name="Tortorella", value="torts"),
+    app_commands.Choice(name="Trump", value="trump"),
+    app_commands.Choice(name="Don Cherry", value="cherry"),
+    app_commands.Choice(name="1940s Filmstrip", value="narrator"),
+    app_commands.Choice(name="Gilbert Gottfried", value="gilbert"),
+])
+async def clubscout(interaction: discord.Interaction, club: str,
+                    voice: app_commands.Choice[str] = None):
+    """The card is the report; a voice choice adds a clip alongside it. The
+    card goes out as soon as it renders and the clip follows, so nobody
+    waits a minute for a picture that was ready in five seconds."""
+    await interaction.response.defer()
+    q = club.strip()
+    try:
+        clubs = await ea.search_clubs(q, limit=5)
+    except ea.EAUnavailable as e:
+        print(f"[clubscout] EA unavailable for {q!r}: {e}")
+        await interaction.followup.send("EA's API isn't answering right now, so I can't look clubs up. "
+                                        "That's on EA's end -- try again in a bit.")
+        return
+    if not clubs:
+        await interaction.followup.send(f"EA has no club matching `{q}`. It has to be the club name "
+                                        "as spelled in-game -- start typing and pick it off the list.")
+        return
+    c = clubs[0]
+    try:
+        detail = await ea.club_detail(c["clubId"], c["_platform"])
+    except Exception as e:
+        print(f"[clubscout] detail failed for {c.get('name')!r}: {type(e).__name__}: {e}")
+        await interaction.followup.send(f"Found **{c.get('name')}** but EA wouldn't hand over its roster "
+                                        f"(`{type(e).__name__}`). Try again in a bit.")
+        return
+    s = clubmod.summarize(c, detail)
+    if not s["skaters"] and not s["goalies"]:
+        await interaction.followup.send(f"**{s['name']}** exists but EA lists nobody on it with games played "
+                                        "this season.")
+        return
+    block = clubmod.format_block(s)
+
+    read = None
+    try:
+        resp = await call_llm(messages=[{"role": "system", "content": CLUB_READ_PROMPT},
+                                        {"role": "user", "content": block}],
+                              max_tokens=160, temperature=0.6)
+        read = (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        print(f"[clubscout] read failed: {type(e).__name__}: {e}")
+
+    try:
+        png = await asyncio.to_thread(card.render_club, s, read)
+    except Exception as e:
+        await interaction.followup.send(f"Card render shit the bed: `{type(e).__name__}: {e}`")
+        return
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", s["name"]).strip("_") or "club"
+    await interaction.followup.send(file=discord.File(io.BytesIO(png), filename=f"{CLIP_BRAND}-clubscout-{safe}.png"))
+
+    if voice:
+        f, err = await _club_voice_file(voice, block)
+        if f:
+            await interaction.followup.send(file=f)
+        else:
+            await interaction.followup.send(f"The **{voice.name}** clip didn't come back: `{err}`"[:2000])
+
+
 # The percentile pool rebuilds itself here, on the bot, because this is the
 # one machine EA reliably answers. Weekly, plus at boot if the pool on the
 # volume is older than that (a fresh volume starts from the repo's pool.json,
@@ -897,6 +1051,7 @@ HELP = """**ChelScout Pubs**
 
 **Scout a player**
 `/pubscout <gamertag>` -- the stat card and a written read.
+`/clubscout <club name>` -- a club's record, roster shape, last 10 and roster.
 Start typing and it suggests real EA gamertags; pick one off the list and you
 can't typo it. It has to be the EA gamertag as spelled in-game, not a Discord
 name -- and it's case-sensitive on EA's end, so the suggestions are the safe

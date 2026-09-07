@@ -669,3 +669,188 @@ def render(m: dict, read: str | None = None, _debug: dict | None = None) -> byte
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
+
+
+# ------------------------------------------------------------------ club
+def _wrap(d, text: str, font, maxw: int, max_lines: int = 3) -> list[str]:
+    lines, line = [], ""
+    for wd in text.split():
+        trial = f"{line} {wd}".strip()
+        if d.textlength(trial, font=font) <= maxw:
+            line = trial
+        else:
+            lines.append(line)
+            line = wd
+    if line:
+        lines.append(line)
+    return lines[:max_lines]
+
+
+def render_club(s: dict, read: str | None = None) -> bytes:
+    """The club card: record and goals up top, the roster-shape radar and
+    recent form side by side, the roster underneath. Every block is optional
+    except the header and roster, because EA doesn't always hand over the
+    season stats or the match list."""
+    f_kicker = _font("bold", 17)
+    f_name = _font("black", 60)
+    f_rec = _font("black", 40)
+    f_sub = _font("medium", 19)
+    f_read = _font("medium", 27)
+    f_stat = _font("black", 42)
+    f_statlbl = _font("bold", 16)
+    f_note = _font("medium", 16)
+    f_word = _font("bold", 17)
+    f_cell = _font("medium", 19)
+    f_row = _font("bold", 20)
+    f_chip = _font("black", 18)
+    f_foot = _font("bold", 17)
+
+    tmp = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    read_lines = _wrap(tmp, read, f_read, W - 2 * PAD - 8) if read else []
+
+    tiles = []
+    if s.get("gf") is not None and s.get("ga") is not None:
+        tiles += [("GF", f"{s['gf']:.0f}"), ("GA", f"{s['ga']:.0f}"),
+                  ("DIFF", f"{s['gf'] - s['ga']:+.0f}")]
+        if s.get("gp"):
+            tiles += [("GF/GP", f"{s['gf'] / s['gp']:.1f}"), ("GA/GP", f"{s['ga'] / s['gp']:.1f}")]
+    elif s.get("w") is not None:
+        tiles += [("W", f"{s['w']:.0f}"), ("L", f"{s['l']:.0f}"), ("OTL", f"{s['otl'] or 0:.0f}")]
+
+    axes = s.get("shape") or []
+    show_radar = len(axes) >= 3
+    formv = (s.get("form") or [])[:10]
+    show_mid = show_radar or formv
+    rows = s["skaters"][:7] + s["goalies"][:1]
+
+    H = (150 + 72 + 34
+         + (len(read_lines) * 36 + 22 if read_lines else 12)
+         + (146 if tiles else 0)
+         + (2 * 118 + 2 * 44 + 40 if show_mid else 0)
+         + 34 + 30 + len(rows) * 42 + 30
+         + 74)
+    img = Image.new("RGB", (W, H), BG)
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, W, 5], fill=BLUE)
+
+    y = 44
+    mark = logo(54)
+    if mark:
+        img.paste(mark, (PAD, y - 12), mark)
+    _text(d, (W - PAD, y + 9), "PUBS CLUB REPORT", f_kicker, DIM, anchor="ra")
+
+    y += 62
+    # Club names run long ("Bar Down Ur Sister"): step the size down before
+    # resorting to an ellipsis, and only clip once 40px still doesn't fit.
+    name = s["name"]
+    budget = W - 2 * PAD - 230
+    for size in (60, 52, 46, 40):
+        f_name = _font("black", size)
+        if d.textlength(name, font=f_name) <= budget:
+            break
+    while d.textlength(name, font=f_name) > budget and len(name) > 6:
+        name = name[:-2].rstrip() + "…"
+    _text(d, (PAD, y + (60 - size) // 2), name, f_name, TEXT)
+    if s.get("w") is not None:
+        _text(d, (W - PAD, y + 8), f"{s['w']:.0f}-{s['l']:.0f}-{s['otl'] or 0:.0f}", f_rec, TEXT, anchor="ra")
+    y += 72
+    # Under the name, not beside it -- a long club name and a right-aligned
+    # subtitle share the same line otherwise.
+    sub = "  ·  ".join(b for b in (
+        f"DIVISION {s['division']}" if s.get("division") not in (None, "") else "",
+        f"{s['gp']:.0f} GP" if s.get("gp") else "",
+        f"{s['n_members']} MEMBERS",
+        f"{s['platform'].upper()}" if s.get("platform") else "") if b)
+    _text(d, (PAD, y), sub, f_sub, MUTED)
+    y += 34
+    if read_lines:
+        for ln in read_lines:
+            _text(d, (PAD, y), ln, f_read, TEXT)
+            y += 36
+        y += 22
+    else:
+        y += 12
+
+    if tiles:
+        tw = (W - 2 * PAD) / len(tiles)
+        d.rounded_rectangle([PAD, y, W - PAD, y + 110], radius=14, fill=PANEL)
+        for i, (lbl, val) in enumerate(tiles):
+            cx = PAD + tw * i + tw / 2
+            if i:
+                d.line([PAD + tw * i, y + 20, PAD + tw * i, y + 90], fill=LINE)
+            _text(d, (cx, y + 42), val, f_stat, TEXT, anchor="mm")
+            _text(d, (cx, y + 84), lbl, f_statlbl, MUTED, anchor="mm")
+        y += 146
+
+    if show_mid:
+        if show_radar:
+            _text(d, (PAD, y), "ROSTER SHAPE  ·  TOP 6 SKATERS + G, RANKED VS THEIR POSITIONS", f_statlbl, DIM)
+        top = y + 24
+        if show_radar:
+            r = 118
+            _radar(img, PAD + 205, top + 44 + r, r, axes, _font("bold", 14), _font("bold", 15))
+            d = ImageDraw.Draw(img)
+        if formv:
+            fx = W - PAD - 270
+            fy = top + 30
+            _text(d, (fx, fy), f"LAST {len(formv)}", f_statlbl, DIM)
+            for i, res in enumerate(formv):
+                col = GREEN if res == "W" else (AMBER if res == "OTL" else RED)
+                x = fx + (i % 5) * 56
+                yy = fy + 30 + (i // 5) * 60
+                d.rounded_rectangle([x, yy, x + 50, yy + 50], radius=10, fill=col)
+                _text(d, (x + 25, yy + 25), res, _font("black", 18 if res != "OTL" else 13), TEXT, anchor="mm")
+            wl = (sum(r == "W" for r in formv), sum(r == "L" for r in formv), sum(r == "OTL" for r in formv))
+            _text(d, (fx, fy + 30 + 2 * 60 + 8), f"{wl[0]}-{wl[1]}-{wl[2]} in the last {len(formv)}", f_note, MUTED)
+            streak_res = formv[0]
+            n = 0
+            for r_ in formv:
+                if r_ == streak_res:
+                    n += 1
+                else:
+                    break
+            _text(d, (fx, fy + 30 + 2 * 60 + 44), "STREAK", f_statlbl, DIM)
+            _text(d, (fx, fy + 30 + 2 * 60 + 68), f"{'W' if streak_res == 'W' else 'L'}{n}", _font("black", 34),
+                  GREEN if streak_res == "W" else RED)
+        y += 2 * 118 + 2 * 44 + 40
+
+    _text(d, (PAD, y), "ROSTER  ·  GRADE IS HIS POSITION'S PERCENTILE", f_statlbl, DIM)
+    y += 34
+    cols = [("PLAYER", PAD, "la"), ("POS", 330, "ma"), ("GP", 400, "ra"), ("G", 460, "ra"), ("A", 520, "ra"),
+            ("PTS", 590, "ra"), ("+/-", 660, "ra"), ("GRADE", W - PAD, "ra")]
+    for lbl, x, a in cols:
+        _text(d, (x, y), lbl, _font("bold", 15), DIM, anchor=a)
+    y += 30
+    for i, r in enumerate(rows):
+        if i % 2 == 0:
+            d.rounded_rectangle([PAD - 12, y - 6, W - PAD + 12, y + 34], radius=8, fill=(18, 21, 27))
+        _text(d, (PAD, y + 2), r["name"][:17], f_row, TEXT)
+        is_g = r["primary"] == "G"
+        d.rounded_rectangle([312, y + 2, 348, y + 26], radius=6, fill=PANEL if is_g else BLUE)
+        _text(d, (330, y + 14), r["primary"], _font("bold", 14), TEXT, anchor="mm")
+        if is_g:
+            cells = [(400, f"{r['glgp']:.0f}"), (460, "-"), (520, "-"),
+                     (590, _fmt("savepct", r["rates"].get("savepct", 0))),
+                     (660, f"{r['rates'].get('gaa', 0):.2f}")]
+        else:
+            cells = [(400, f"{r['gp']:.0f}"), (460, f"{r['g']:.0f}"), (520, f"{r['a']:.0f}"),
+                     (590, f"{r['pts']:.0f}"), (660, f"{r['pm']:+.0f}")]
+        for x, v in cells:
+            _text(d, (x, y + 2), v, f_cell, MUTED if v == "-" else TEXT, anchor="ra")
+        p = r.get("grade")
+        if p is not None:
+            _text(d, (W - PAD, y + 2), tier(p), _font("bold", 18), _pole(p), anchor="ra")
+            _text(d, (W - PAD - 92, y + 6), _ordinal(p), _font("medium", 14), DIM, anchor="ra")
+        else:
+            _text(d, (W - PAD, y + 2), "n/a", _font("bold", 18), DIM, anchor="ra")
+        y += 42
+    _text(d, (PAD, y + 4), "G row: SV% and GAA in place of PTS and +/-", f_note, DIM)
+
+    y = H - 56
+    d.line([PAD, y - 20, W - PAD, y - 20], fill=LINE)
+    _text(d, (PAD, y), "chelscout.net", f_foot, BLUE_TEXT)
+    _text(d, (W - PAD, y), "SCOUT SMARTER. CHIRP RESPONSIBLY.", f_foot, DIM, anchor="ra")
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
