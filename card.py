@@ -296,6 +296,7 @@ def render(m: dict, read: str | None = None) -> bytes:
     skater_gp = max(gp - glgp, 0)
     goals, assists = ea._num(m.get("skgoals")), ea._num(m.get("skassists"))
     points = goals + assists
+    plusmin = ea._num(m.get("skplusmin"))
     posns = _positions(m)
     primary = posns[0][0] if posns else "?"
     is_goalie = primary == "G"
@@ -437,7 +438,11 @@ def render(m: dict, read: str | None = None) -> bytes:
               ("GP", f"{glgp:.0f}"), ("SO", f"{ea._num(m.get('glso')):.0f}")]
              if is_goalie else
              [("PTS", f"{points:.0f}"), ("G", f"{goals:.0f}"), ("A", f"{assists:.0f}"),
-              ("P/GP", f"{points / skater_gp:.2f}" if skater_gp else "-")])
+              ("P/GP", f"{points / skater_gp:.2f}" if skater_gp else "-"),
+              # The bar below already grades his +/- as a per-game rate, but
+              # the raw season number is what people actually quote at each
+              # other, and it was nowhere on the card.
+              ("+/-", f"{plusmin:+.0f}" if skater_gp else "-")])
     tw = (W - 2 * PAD) / len(tiles)
     _rr = d.rounded_rectangle
     _rr([PAD, y, W - PAD, y + 110], radius=14, fill=PANEL)
