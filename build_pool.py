@@ -154,24 +154,46 @@ swip swir swis swit swiv swol swoo swop swor sydn sykes sylv symb symo sync synd
 """.split()
 
 
+# If this many stems in a row fail every call, EA is not answering this
+# machine at all. Stop, instead of retrying 1,136 stems with backoff for the
+# better part of an hour to learn the same thing.
+DEAD_STEMS = int(os.getenv("POOL_DEAD_STEMS", "20"))
+
+
+class Blocked(Exception):
+    pass
+
+
 def collect() -> list[dict]:
     seen, out = set(), []
+    dead_run = [0]  # consecutive stems where every EA call failed
 
     def fetch(stem):
         # EA rate-limits hard: a 12-worker run over this stem list earned a
         # 403 for the whole machine partway through, and every request after
         # it silently returned nothing. Keep the concurrency low and pause
         # between requests -- the run takes longer but actually completes.
+        if dead_run[0] >= DEAD_STEMS:
+            return None
         for attempt in range(3):
             try:
-                return ea.sample_hits(stem)
+                hits = ea.sample_hits(stem)
+                dead_run[0] = 0
+                return hits
             except Exception:
                 time.sleep(2 * (attempt + 1))
-        return []
+        dead_run[0] += 1
+        return None
 
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         for i, hits in enumerate(pool.map(fetch, STEMS), 1):
             time.sleep(THROTTLE)
+            if hits is None:
+                if dead_run[0] >= DEAD_STEMS:
+                    raise Blocked(f"{DEAD_STEMS} stems in a row failed every EA call "
+                                  f"(after {i} stems, {len(out)} players) -- EA is "
+                                  "blocking or rate-limiting this machine")
+                continue
             for m in hits:
                 name = str(m.get("name") or "").lower()
                 if name and name not in seen:
@@ -368,7 +390,11 @@ def main():
         print(f"reusing {RAW}: {len(players)} players (--refresh to re-sample)", flush=True)
     else:
         print(f"sampling {len(STEMS)} stems...", flush=True)
-        players = collect()
+        try:
+            players = collect()
+        except Blocked as e:
+            print(f"ABORT: {e}; pool.json untouched.", file=sys.stderr)
+            sys.exit(2)
         if len(players) < MIN_SAMPLE:
             print(f"ABORT: only {len(players)} players sampled (need {MIN_SAMPLE}). "
                   "EA is blocking or rate-limiting this machine; pool.json untouched.",
