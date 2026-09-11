@@ -934,7 +934,7 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
     by_slot = {p["slot"]: p for p in pairs}
     order = [s for s in POS_ORDER if s in by_slot]
     R = 150
-    PAIR_H = 66 + len(clubmod.AXES) * 30 + 24
+    PAIR_H = 66 + len(clubmod.AXES) * 27 + 22
     H = (150 + 70 + (34 if note else 0)          # header
          + 46 + 2 * R + 118                       # radar + axis labels
          + 56                                     # goalie line
@@ -1018,8 +1018,8 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
     y += 56
 
     # ---- five pairing blocks: both men's full axis lines as paired bars
-    _text(d, (PAD, y), "5V5  ·  YOUR MAN AT EACH POSITION vs THE MAN HE LINES UP AGAINST  ·  "
-                       "red number = his lowest graded skill", f_h, DIM)
+    _text(d, (PAD, y), "5V5  ·  YOUR MAN vs THE MAN HE LINES UP AGAINST  ·  "
+                       "center tick = a typical player  ·  red = his lowest skill", f_h, DIM)
     y += 44
     bar_x0, bar_x1 = PAD + 210, W - PAD - 120
     bw = bar_x1 - bar_x0
@@ -1036,21 +1036,31 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
             lab = "EVEN" if diff == 0 else f"{'YOU' if diff > 0 else 'THEM'} +{abs(diff)}"
             col = DIM if diff == 0 else (BLUE_TEXT if diff > 0 else THEM)
             _text(d, (W / 2, yy + 26), f"{p['ov_us']} vs {p['ov_them']}  ·  {lab}", f_edge, col, anchor="ma")
-        yy = y + 66
+        yy = y + 70
         for i, (lbl, key) in enumerate(clubmod.AXES):
             vu, vt = p["ax_us"][i], p["ax_them"][i]
-            _text(d, (PAD + 22, yy + 3), lbl, f_ax, MUTED)
-            # two thin bars, blue over amber, on the same 0-100 scale
-            d.rounded_rectangle([bar_x0, yy + 2, bar_x1, yy + 9], radius=3, fill=(30, 34, 43))
-            if vu is not None and vu > 0:
-                d.rounded_rectangle([bar_x0, yy + 2, bar_x0 + bw * vu / 100, yy + 9], radius=3, fill=BLUE)
-            d.rounded_rectangle([bar_x0, yy + 13, bar_x1, yy + 20], radius=3, fill=(30, 34, 43))
-            if vt is not None and vt > 0:
-                d.rounded_rectangle([bar_x0, yy + 13, bar_x0 + bw * vt / 100, yy + 20], radius=3, fill=THEM)
+            _text(d, (PAD + 22, yy - 5), lbl, f_ax, MUTED)
+            # dumbbell: one shared 0-100 track, a dot per man, the distance
+            # between the dots IS the matchup on that skill
+            ty = yy + 4
+            d.line([bar_x0, ty, bar_x1, ty], fill=(30, 34, 43), width=4)
+            for tick in (25, 50, 75):
+                tx = bar_x0 + bw * tick / 100
+                th = 7 if tick == 50 else 4
+                d.line([tx, ty - th, tx, ty + th], fill=(70, 76, 92) if tick == 50 else (40, 45, 56), width=2)
+            if vu is not None and vt is not None:
+                xu, xt = bar_x0 + bw * vu / 100, bar_x0 + bw * vt / 100
+                d.line([xu, ty, xt, ty], fill=(96, 102, 116), width=4)
             them_col = RED if p["attack"] == i else THEM
-            _text(d, (bar_x1 + 14, yy - 3), "--" if vu is None else str(vu), f_val, BLUE_TEXT)
-            _text(d, (bar_x1 + 64, yy - 3), "--" if vt is None else str(vt), f_val, them_col)
-            yy += 30
+            if vt is not None:
+                xt = bar_x0 + bw * vt / 100
+                d.ellipse([xt - 7, ty - 7, xt + 7, ty + 7], fill=them_col, outline=(*BG, 255), width=2)
+            if vu is not None:
+                xu = bar_x0 + bw * vu / 100
+                d.ellipse([xu - 7, ty - 7, xu + 7, ty + 7], fill=BLUE_TEXT, outline=(*BG, 255), width=2)
+            _text(d, (bar_x1 + 14, yy - 5), "--" if vu is None else str(vu), f_val, BLUE_TEXT)
+            _text(d, (bar_x1 + 64, yy - 5), "--" if vt is None else str(vt), f_val, them_col)
+            yy += 27
         y += PAIR_H
 
     fy = H - 56
