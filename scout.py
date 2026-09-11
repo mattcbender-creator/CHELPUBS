@@ -231,6 +231,30 @@ def match_lineup(s: dict, cid: str) -> tuple[dict, int]:
     return out, lk["games_seen"]
 
 
+def fwd_style(lineup: dict, cid: str) -> list:
+    """For the matchup card's forwards scatter: each forward's puck time
+    (seconds of possession per game, from this club's banked matches) and
+    his shooter/playmaker split (career goal share). Only forwards with a
+    2+ game possession sample appear -- no sample, no dot."""
+    rows = _rows(harvest.load_store())
+    out = []
+    for slot in ("LW", "C", "RW"):
+        r = lineup.get(slot)
+        if not r:
+            continue
+        nm = r["name"]
+        rs = [x for x in rows.get(nm, []) if x["club"] == str(cid) and x["pos"] != "G"]
+        if len(rs) < 2:
+            rs = [x for x in rows.get(nm, []) if x["pos"] != "G"]
+        if len(rs) < 2:
+            continue
+        poss = sum(x["poss"] for x in rs) / len(rs)
+        g, a = r.get("g", 0), r.get("a", 0)
+        gs = 100 * g / (g + a) if (g + a) else 50
+        out.append({"name": nm, "slot": slot, "poss": round(poss), "gs": round(gs), "gp": len(rs)})
+    return out
+
+
 def _form_line(nm: str, rows: dict, min_gp: int = 2) -> str | None:
     """One data-only line of recent harvested form for a player, or None
     when the sample is under the floor. Private games preferred."""

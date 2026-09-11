@@ -919,7 +919,8 @@ POS_ORDER = ["C", "RW", "RD", "LD", "LW"]
 
 
 def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
-                   custom: bool = False, note: str | None = None) -> bytes:
+                   custom: bool = False, note: str | None = None,
+                   fwds: dict | None = None) -> bytes:
     """Numbers only, no prescriptions. Main radar is the PLAY-STYLE overlay
     (five-man mean percentile per skill); below it, one block per 5v5
     pairing showing both men's full axis lines as paired bars -- the
@@ -939,6 +940,7 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
          + 46 + 2 * R + 132                       # two radars side by side
          + 56                                     # goalie line
          + 44 + 40 + len(order) * PAIR_H          # gap ladder
+         + (46 + 236 + 40 if fwds and (fwds.get("us") or fwds.get("them")) else 0)
          + 74)
     img = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(img)
@@ -1026,6 +1028,49 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
     _text(d, (W - PAD, y), gline(b), f_note, THEM, anchor="ra")
     _text(d, (W / 2, y), "IN NET", f_h, DIM, anchor="ma")
     y += 56
+
+    # ---- forwards: who holds the puck, and what he does with it.
+    # y = seconds of possession per game (banked matches); x = career goal
+    # share, shooter left, playmaker right. A dot per forward, team colour.
+    if fwds and (fwds.get("us") or fwds.get("them")):
+        pts = ([dict(f, team="us") for f in fwds.get("us", [])]
+               + [dict(f, team="them") for f in fwds.get("them", [])])
+        _text(d, (PAD, y), "FORWARDS  ·  PUCK TIME vs STYLE  ·  from banked matches", f_h, DIM)
+        y += 46
+        px0, px1 = PAD + 76, W - PAD - 40
+        py1 = y + 190
+        top = max(f["poss"] for f in pts) * 1.15 or 1
+        # frame + midline
+        d.line([px0, y, px0, py1], fill=LINE, width=2)
+        d.line([px0, py1, px1, py1], fill=LINE, width=2)
+        xm = (px0 + px1) / 2
+        d.line([xm, y, xm, py1], fill=(30, 34, 43), width=2)
+        f_axl = _font("bold", 14); f_dot = _font("bold", 16)
+        _text(d, (px0, py1 + 12), "SHOOTER", f_axl, MUTED)
+        _text(d, (px1, py1 + 12), "PLAYMAKER", f_axl, MUTED, anchor="ra")
+        _text(d, (xm, py1 + 12), "50/50", f_axl, DIM, anchor="ma")
+        _text(d, (px0 - 12, y - 4), f"{top:.0f}s", f_axl, DIM, anchor="ra")
+        _text(d, (px0 - 12, py1 - 14), "0s", f_axl, DIM, anchor="ra")
+        _text(d, (px0 - 12, (y + py1) / 2), "PUCK\nTIME\n/GM", f_axl, DIM, anchor="rm")
+        placed = []
+        for f in pts:
+            fx = px0 + (px1 - px0) * (100 - f["gs"]) / 100
+            fy = py1 - (py1 - y) * f["poss"] / top
+            placed.append({"fx": fx, "fy": fy, "ly": fy,
+                           "col": BLUE_TEXT if f["team"] == "us" else THEM,
+                           "lbl": f"{f['name']}  {f['poss']}s"})
+        # labels: nudge apart vertically so close dots never overprint
+        placed.sort(key=lambda q: q["fy"])
+        for i in range(1, len(placed)):
+            if placed[i]["ly"] - placed[i - 1]["ly"] < 22:
+                placed[i]["ly"] = placed[i - 1]["ly"] + 22
+        for q in placed:
+            d.ellipse([q["fx"] - 8, q["fy"] - 8, q["fx"] + 8, q["fy"] + 8],
+                      fill=q["col"], outline=(*BG, 255), width=2)
+            anchor2 = "lm" if q["fx"] < xm else "rm"
+            lx = q["fx"] + 14 if q["fx"] < xm else q["fx"] - 14
+            _text(d, (lx, q["ly"]), q["lbl"], f_dot, q["col"], anchor=anchor2)
+        y = py1 + 40
 
     # ---- the gap ladder: one row per pairing, one diverging bar per row.
     # The bar grows from the centre line toward whoever holds the edge; its

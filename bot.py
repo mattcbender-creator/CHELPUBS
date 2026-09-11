@@ -1135,7 +1135,9 @@ class MatchupView(discord.ui.View):
 
     async def rerender(self, interaction: discord.Interaction):
         pairs = clubmod.pairings(self.la, self.lb)
-        png = await asyncio.to_thread(card.render_matchup, self.a, self.b, pairs, None, self.custom)
+        fwds = {"us": await asyncio.to_thread(scout.fwd_style, self.la, self.a["club_id"]),
+                "them": await asyncio.to_thread(scout.fwd_style, self.lb, self.b["club_id"])}
+        png = await asyncio.to_thread(card.render_matchup, self.a, self.b, pairs, None, self.custom, None, fwds)
         self._build()
         safe = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{self.a['name']}-vs-{self.b['name']}").strip("_")
         await interaction.edit_original_response(
@@ -1181,7 +1183,9 @@ async def matchup(interaction: discord.Interaction, you: str, them: str):
     src = " · ".join(f"{s['name']}: {'lineup from last ' + str(n) + ' matches' if n else 'lineup by career games (no matches banked)'}"
                      for s, n in ((a, gs_a), (b, gs_b)))
     try:
-        png = await asyncio.to_thread(card.render_matchup, a, b, pairs, None, False, src)
+        fwds = {"us": await asyncio.to_thread(scout.fwd_style, la, a["club_id"]),
+                "them": await asyncio.to_thread(scout.fwd_style, lb, b["club_id"])}
+        png = await asyncio.to_thread(card.render_matchup, a, b, pairs, None, False, src, fwds)
     except Exception as e:
         await interaction.followup.send(f"Card render shit the bed: `{type(e).__name__}: {e}`")
         return
