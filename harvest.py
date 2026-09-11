@@ -60,23 +60,26 @@ def _get(url: str):
         raise
 
 
-def absorb(club_id: str, matches: list | None, members: list | None) -> int:
+def absorb(club_id: str, matches: list | None, members: list | None,
+           pub_matches: list | None = None) -> int:
     """Bank data another command already fetched -- no network. Every
     /clubscout and /matchup call feeds the store this way, so history
-    accumulates from normal use, not just the scheduled poll."""
-    if not matches and not members:
+    accumulates from normal use, not just the scheduled poll. Private and
+    public feeds are tagged separately and never blended."""
+    if not matches and not members and not pub_matches:
         return 0
     added = 0
     with _LOCK:
         store = load_store()
-        for m in matches or []:
-            mid = str(m.get("matchId"))
-            if mid and mid not in store["matches"]:
-                m = dict(m)
-                m["_matchType"] = "club_private"
-                m["_club"] = str(club_id)
-                store["matches"][mid] = m
-                added += 1
+        for mt, ms in (("club_private", matches), ("gameType5", pub_matches)):
+            for m in ms or []:
+                mid = str(m.get("matchId"))
+                if mid and mid not in store["matches"]:
+                    m = dict(m)
+                    m["_matchType"] = mt
+                    m["_club"] = str(club_id)
+                    store["matches"][mid] = m
+                    added += 1
         if members:
             store["members"][str(club_id)] = {"at": time.time(), "members": members}
         if added or members:

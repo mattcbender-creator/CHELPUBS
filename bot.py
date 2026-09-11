@@ -925,7 +925,8 @@ async def clubscout(interaction: discord.Interaction, club: str,
     s = clubmod.summarize(c, detail)
     # bank what we just fetched -- history accumulates from normal use
     asyncio.create_task(asyncio.to_thread(
-        harvest.absorb, str(c["clubId"]), detail.get("matches"), detail.get("members")))
+        harvest.absorb, str(c["clubId"]), detail.get("matches"), detail.get("members"),
+        detail.get("matches_pub")))
     if not s["skaters"] and not s["goalies"]:
         await interaction.followup.send(f"**{s['name']}** exists but EA lists nobody on it with games played "
                                         "this season.")
@@ -1004,15 +1005,25 @@ async def _augment_guests(club_id: str, detail: dict) -> None:
     missing = {n: m for n, m in known.items() if n.lower() not in on_roster}
     if not missing:
         return
-    # careers we don't hold yet: one lookup each, same call a /pubscout makes
+    # Careers we don't hold yet: SERIAL, exact-name, one platform, a pause
+    # between -- the feed spells names exactly, so no casing fan-out. A
+    # gather of full search_player calls here put ~100 requests in flight
+    # from one command; 16 concurrent got this IP banned once already.
     to_fetch = [n for n, m in missing.items() if not m][:10]
-    if to_fetch:
-        fetched = await asyncio.gather(*(ea.search_player(n) for n in to_fetch),
-                                       return_exceptions=True)
-        got = {n: m for n, m in zip(to_fetch, fetched) if isinstance(m, dict)}
+    got = {}
+    for i, n in enumerate(to_fetch):
+        if i:
+            await asyncio.sleep(0.75)
+        try:
+            m2 = await asyncio.to_thread(ea.exact_member_sync, n)
+        except ea.RateLimited as e:
+            print(f"[matchup] guest lookups stopped, EA throttling: {e}", flush=True)
+            break
+        if m2:
+            got[n] = m2
+    if got:
         missing.update(got)
-        if got:
-            asyncio.create_task(asyncio.to_thread(harvest.add_careers, got))
+        asyncio.create_task(asyncio.to_thread(harvest.add_careers, got))
     added = [m for m in missing.values() if m]
     if added:
         detail["members"] = members + added
@@ -1037,7 +1048,8 @@ async def _load_club(name: str) -> tuple[dict | None, str | None]:
         return None, f"Found **{c.get('name')}** but EA wouldn't hand over its roster (`{type(e).__name__}`)."
     # bank first (so dressed() sees today's matches), then fill from it
     await asyncio.to_thread(
-        harvest.absorb, str(c["clubId"]), detail.get("matches"), detail.get("members"))
+        harvest.absorb, str(c["clubId"]), detail.get("matches"), detail.get("members"),
+        detail.get("matches_pub"))
     await _augment_guests(str(c["clubId"]), detail)
     s = clubmod.summarize(c, detail)
     if not s["skaters"]:
@@ -1157,7 +1169,8 @@ async def matchup(interaction: discord.Interaction, you: str, them: str):
     if not a or not b:
         await interaction.followup.send(err_a or err_b)
         return
-    la, lb = clubmod.lineup(a), clubmod.lineup(b)
+    (la, gs_a), (lb, gs_b) = (await asyncio.to_thread(scout.match_lineup, a, a["club_id"]),
+                              await asyncio.to_thread(scout.match_lineup, b, b["club_id"]))
     pairs = clubmod.pairings(la, lb)
     # The radar needs at least 3 axes; fewer means one side's EA roster is
     # too thin to ice a five (first hit live: a club whose whole lineup
@@ -1186,8 +1199,13 @@ async def matchup(interaction: discord.Interaction, you: str, them: str):
         await interaction.followup.send(f"Card render shit the bed: `{type(e).__name__}: {e}`")
         return
     safe = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{a['name']}-vs-{b['name']}").strip("_")
+    # the receipt: where each default five came from, so a wrong-looking
+    # lineup reads as "thin sample", not "broken product"
+    src = " · ".join(f"{s['name']}: {'last ' + str(n) + ' matches' if n else 'career games (no matches banked)'}"
+                     for s, n in ((a, gs_a), (b, gs_b)))
     view = MatchupView(a, b, la, lb, read)
     view.message = await interaction.followup.send(
+        content=f"-# Lineups from {src}. Buttons re-pick any slot.",
         file=discord.File(io.BytesIO(png), filename=f"{CLIP_BRAND}-matchup-{safe}.png"), view=view, wait=True)
 
 

@@ -183,6 +183,27 @@ def sample_hits(stem: str, pause: float = 0.75, timeout: int = 15) -> list:
     return hits
 
 
+def exact_member_sync(name: str, platform: str = "common-gen5", timeout: int = 15) -> dict | None:
+    """ONE request for a name we know is spelled exactly right (it came out
+    of EA's own match feed, not a user's keyboard). No casing fan-out, no
+    second platform (gen4 members/search 400s on every call). Callers doing
+    several of these must go serially with a pause -- see _augment_guests.
+    Raises RateLimited on a 403 so the loop stops instead of hammering."""
+    try:
+        data = _get(f"{BASE}/members/search?platform={platform}"
+                    f"&memberName={quote(name)}", timeout=timeout)
+    except Exception as e:
+        if "403" in str(e):
+            raise RateLimited(f"403 on exact lookup {name!r}") from e
+        print(f"[ea] exact lookup FAILED {name!r}: {type(e).__name__}: {e}")
+        return None
+    for m in data.get("members", []) or []:
+        if str(m.get("name", "")).lower() == name.lower():
+            m["_platform"] = platform
+            return m
+    return None
+
+
 def _all_hits(gamertag: str, fast: bool = False) -> list:
     """Every member EA returns for this query, across platforms. Cached briefly.
 
@@ -821,9 +842,22 @@ def _club_detail_sync(club_id: str, platform: str) -> dict:
             print(f"[ea] clubs/matches failed for {club_id}: {type(e).__name__}: {e}")
             return []
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        fm, fs, fx = pool.submit(members), pool.submit(stats), pool.submit(matches)
-        return {"members": fm.result(), "stats": fs.result(), "matches": fx.result()}
+    def matches_pub():
+        # The public 6s feed too: one extra request, and for a club that
+        # never scrims it is the only dress evidence there is.
+        try:
+            data = _club_get("clubs/matches-pub",
+                             f"{BASE}/clubs/matches?platform={platform}&clubIds={cid}"
+                             f"&matchType=gameType5&maxResultCount=10")
+            return _as_records(data)
+        except Exception as e:
+            print(f"[ea] clubs/matches gameType5 failed for {club_id}: {type(e).__name__}: {e}")
+            return []
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        fm, fs, fx, fp = pool.submit(members), pool.submit(stats), pool.submit(matches), pool.submit(matches_pub)
+        return {"members": fm.result(), "stats": fs.result(), "matches": fx.result(),
+                "matches_pub": fp.result()}
 
 
 async def club_detail(club_id: str, platform: str) -> dict:

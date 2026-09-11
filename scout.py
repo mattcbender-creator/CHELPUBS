@@ -186,6 +186,51 @@ def dressed(cid: str) -> dict:
     return {n: store["careers"].get(n) for n in sorted(names)}
 
 
+def match_lineup(s: dict, cid: str) -> tuple[dict, int]:
+    """Default five for /matchup from who actually dressed where in this
+    club's banked matches -- the same slot-frequency read the board uses,
+    so both surfaces share ONE definition of 'the lineup'. Career games
+    only break ties; gaps fall back to club.lineup(). Returns
+    (slot -> skater row, games the read is built from)."""
+    lk = _likely(harvest.load_store(), str(cid))
+    slots = lk["slots"]
+    by_name = {r["name"]: r for r in s["skaters"]}
+    out, used = {}, set()
+
+    def take(freq_pos, slot):
+        cands = sorted(((c.get(freq_pos, 0), by_name[n]["gp"], n)
+                        for n, c in slots.items()
+                        if c.get(freq_pos, 0) > 0 and n in by_name and n not in used),
+                       reverse=True)
+        if cands:
+            out[slot] = by_name[cands[0][2]]
+            used.add(cands[0][2])
+
+    for sl in ("LW", "C", "RW"):
+        take(sl, sl)
+    ds = sorted(((c.get("D", 0), by_name[n]["gp"], n) for n, c in slots.items()
+                 if c.get("D", 0) > 0 and n in by_name and n not in used), reverse=True)
+    if ds:
+        out["LD"] = by_name[ds[0][2]]
+        used.add(ds[0][2])
+    if len(ds) > 1:
+        out["RD"] = by_name[ds[1][2]]
+        used.add(ds[1][2])
+
+    fb = clubmod.lineup(s)
+    for sl in clubmod.SLOTS:
+        if sl in out:
+            continue
+        pick = fb.get(sl)
+        if pick is None or pick["name"] in used:
+            pick = next((r for r in sorted(s["skaters"], key=lambda r: -r["gp"])
+                         if r["name"] not in used), None)
+        if pick:
+            out[sl] = pick
+            used.add(pick["name"])
+    return out, lk["games_seen"]
+
+
 def _form_line(nm: str, rows: dict, min_gp: int = 2) -> str | None:
     """One data-only line of recent harvested form for a player, or None
     when the sample is under the floor. Private games preferred."""
