@@ -808,6 +808,14 @@ def _club_detail_sync(club_id: str, platform: str) -> dict:
                 entry = next(iter(recs[0]["clubs"].values()), None)
                 if isinstance(entry, dict):
                     _log_shape("clubs/matches[0].clubs[x]", entry)
+            # Every match, briefly: game type, when, score. This is how we
+            # find out whether PIN-lobby (private) games show up in the
+            # feed at all, and what EA calls them if they do.
+            for m in recs[:10]:
+                e = m.get("clubs", {}).get(str(club_id), {}) if isinstance(m.get("clubs"), dict) else {}
+                print(f"[ea] match {m.get('matchId')} {m.get('timeAgo')} type={e.get('cNhlOnlineGameType')!r} "
+                      f"div={e.get('clubDivision')!r} score={e.get('score')!r}-{e.get('opponentScore')!r} "
+                      f"gf/ga={e.get('gfraw')!r}/{e.get('garaw')!r} opp={e.get('opponentClubId')!r}")
             return recs
         except Exception as e:
             print(f"[ea] clubs/matches failed for {club_id}: {type(e).__name__}: {e}")
