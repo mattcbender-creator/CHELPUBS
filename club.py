@@ -182,9 +182,11 @@ def format_block(s: dict) -> str:
 
 
 # ---------------------------------------------------------------- matchup
-SLOTS = ["C", "LW", "RW", "D", "D"]
+# EA doesn't split defence into left and right. LD is the D with more games,
+# RD the next; the dropdowns on the card let anyone swap them.
+SLOTS = ["LW", "C", "RW", "LD", "RD"]
 # Who lines up against whom at 5v5: a winger drives at the far-side D.
-PAIRS = [("C", "C"), ("LW", "D2"), ("RW", "D1"), ("D1", "RW"), ("D2", "LW")]
+PAIRS = [("LW", "RD"), ("C", "C"), ("RW", "LD"), ("LD", "RW"), ("RD", "LW")]
 ATTACK = {
     "scoring": "give him the shot, take away his pass",
     "playmaking": "he's a shooter -- cheat to the shot lane",
@@ -207,15 +209,20 @@ def lineup(s: dict, min_gp: int = 5) -> dict[str, dict]:
     pool = [r for r in sorted(s["skaters"], key=lambda r: -r["gp"]) if r["gp"] >= min_gp]
     out, used = {}, set()
     for slot in SLOTS:
-        pick = next((r for r in pool if r["primary"] == slot and id(r) not in used), None)
+        want = "D" if slot in ("LD", "RD") else slot
+        pick = next((r for r in pool if r["primary"] == want and id(r) not in used), None)
         if pick is None:
             pick = next((r for r in pool if id(r) not in used), None)
         if pick is None:
             continue
         used.add(id(pick))
-        key = slot if slot != "D" else ("D1" if "D1" not in out else "D2")
-        out[key] = pick
+        out[slot] = pick
     return out
+
+
+def candidates(s: dict, limit: int = 25) -> list[dict]:
+    """Everyone who could fill a slot, most games first -- the dropdowns."""
+    return sorted(s["skaters"], key=lambda r: -r["gp"])[:limit]
 
 
 def pairings(us: dict, them: dict) -> list[dict]:

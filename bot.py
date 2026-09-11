@@ -990,6 +990,109 @@ async def _load_club(name: str) -> tuple[dict | None, str | None]:
     return s, None
 
 
+class MatchupView(discord.ui.View):
+    """The buttons under a matchup card. Four of them, one per group:
+    YOUR FORWARDS / YOUR D / THEIR FORWARDS / THEIR D. Tap one and that
+    group's dropdowns appear (LW, C, RW or LD, RD), each listing the
+    club's roster; pick a man and the card re-renders in place. "Back"
+    returns to the plain buttons. Anyone in the channel can drive it; it
+    goes inert after 15 minutes."""
+
+    GROUPS = {"uf": ("us", ["LW", "C", "RW"]), "ud": ("us", ["LD", "RD"]),
+              "tf": ("them", ["LW", "C", "RW"]), "td": ("them", ["LD", "RD"])}
+
+    def __init__(self, a: dict, b: dict, la: dict, lb: dict, read: str | None):
+        super().__init__(timeout=900)
+        self.a, self.b, self.la, self.lb, self.read = a, b, la, lb, read
+        self.group = None
+        self.custom = False
+        self.message = None
+        self._build()
+
+    def _build(self):
+        self.clear_items()
+        if self.group:
+            side, slots = self.GROUPS[self.group]
+            team = self.a if side == "us" else self.b
+            lineup = self.la if side == "us" else self.lb
+            cands = clubmod.candidates(team)
+            for slot in slots:
+                cur = lineup.get(slot)
+                opts = [discord.SelectOption(
+                            label=f"{r['name'][:70]}  ·  {r['primary']}, {r['gp']:.0f} GP",
+                            value=r["name"][:100],
+                            default=bool(cur and r["name"] == cur["name"]))
+                        for r in cands] or [discord.SelectOption(label="nobody", value="-")]
+                sel = discord.ui.Select(placeholder=f"{'Your' if side == 'us' else 'Their'} {slot}",
+                                        options=opts, min_values=1, max_values=1)
+                sel.callback = self._pick_cb(slot, side)
+                self.add_item(sel)
+            back = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary, row=4)
+            back.callback = self._group_cb(None)
+            self.add_item(back)
+            return
+        for key, label, style in (("uf", "Your forwards", discord.ButtonStyle.primary),
+                                  ("ud", "Your D", discord.ButtonStyle.primary),
+                                  ("tf", "Their forwards", discord.ButtonStyle.secondary),
+                                  ("td", "Their D", discord.ButtonStyle.secondary)):
+            b = discord.ui.Button(label=label, style=style, row=0)
+            b.callback = self._group_cb(key)
+            self.add_item(b)
+
+    def _group_cb(self, key):
+        async def cb(interaction: discord.Interaction):
+            self.group = key
+            self._build()
+            await interaction.response.edit_message(view=self)
+        return cb
+
+    def _pick_cb(self, slot: str, side: str):
+        async def cb(interaction: discord.Interaction):
+            sel = next(i for i in self.children if isinstance(i, discord.ui.Select) and i.placeholder.endswith(f" {slot}"))
+            name = sel.values[0]
+            team = self.a if side == "us" else self.b
+            lineup = self.la if side == "us" else self.lb
+            pick = next((r for r in clubmod.candidates(team) if r["name"] == name), None)
+            if pick is None:
+                await interaction.response.defer()
+                return
+            # a man can only hold one slot: if he was elsewhere, the two swap
+            for k, v in list(lineup.items()):
+                if v is pick and k != slot:
+                    lineup[k] = lineup.get(slot, v)
+            lineup[slot] = pick
+            self.custom = True
+            await interaction.response.defer()
+            await self.rerender(interaction)
+        return cb
+
+    async def rerender(self, interaction: discord.Interaction):
+        pairs = clubmod.pairings(self.la, self.lb)
+        block = clubmod.format_matchup(self.a, self.b, pairs)
+        read = self.read
+        try:
+            resp = await call_llm(messages=[{"role": "system", "content": MATCHUP_READ_PROMPT},
+                                            {"role": "user", "content": block}],
+                                  max_tokens=180, temperature=0.6)
+            read = (resp.choices[0].message.content or "").strip() or read
+        except Exception as e:
+            print(f"[matchup] re-read failed: {type(e).__name__}: {e}")
+        self.read = read
+        png = await asyncio.to_thread(card.render_matchup, self.a, self.b, pairs, read, self.custom)
+        self._build()
+        safe = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{self.a['name']}-vs-{self.b['name']}").strip("_")
+        await interaction.edit_original_response(
+            attachments=[discord.File(io.BytesIO(png), filename=f"{CLIP_BRAND}-matchup-{safe}.png")], view=self)
+
+    async def on_timeout(self):
+        self.clear_items()
+        try:
+            if self.message:
+                await self.message.edit(view=None)
+        except Exception:
+            pass
+
+
 @tree.command(name="matchup", description="5v5 matchup: your club vs theirs -- team shapes overlaid, who to attack")
 @app_commands.describe(you="Your club, as spelled in-game", them="The club you're playing")
 @app_commands.autocomplete(you=club_autocomplete, them=club_autocomplete)
@@ -999,7 +1102,8 @@ async def matchup(interaction: discord.Interaction, you: str, them: str):
     if not a or not b:
         await interaction.followup.send(err_a or err_b)
         return
-    pairs = clubmod.pairings(clubmod.lineup(a), clubmod.lineup(b))
+    la, lb = clubmod.lineup(a), clubmod.lineup(b)
+    pairs = clubmod.pairings(la, lb)
     if not pairs:
         await interaction.followup.send("Neither club has five skaters with games played, so there's no lineup to pair.")
         return
@@ -1018,7 +1122,9 @@ async def matchup(interaction: discord.Interaction, you: str, them: str):
         await interaction.followup.send(f"Card render shit the bed: `{type(e).__name__}: {e}`")
         return
     safe = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{a['name']}-vs-{b['name']}").strip("_")
-    await interaction.followup.send(file=discord.File(io.BytesIO(png), filename=f"{CLIP_BRAND}-matchup-{safe}.png"))
+    view = MatchupView(a, b, la, lb, read)
+    view.message = await interaction.followup.send(
+        file=discord.File(io.BytesIO(png), filename=f"{CLIP_BRAND}-matchup-{safe}.png"), view=view, wait=True)
 
 
 # ------------------------------------------------------------ pool rebuild
