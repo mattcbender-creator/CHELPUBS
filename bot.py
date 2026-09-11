@@ -1118,8 +1118,17 @@ async def matchup(interaction: discord.Interaction, you: str, them: str):
         return
     la, lb = clubmod.lineup(a), clubmod.lineup(b)
     pairs = clubmod.pairings(la, lb)
-    if not pairs:
-        await interaction.followup.send("Neither club has five skaters with games played, so there's no lineup to pair.")
+    # The radar needs at least 3 axes; fewer means one side's EA roster is
+    # too thin to ice a five (first hit live: a club whose whole lineup
+    # plays as guests, so members/stats returned ONE player).
+    if len(pairs) < 3:
+        thin = " and ".join(f"**{s['name']}** ({len(s['skaters'])} rated skater"
+                            f"{'s' if len(s['skaters']) != 1 else ''} on EA's roster)"
+                            for s in (a, b) if len(s["skaters"]) < 5)
+        await interaction.followup.send(
+            f"Not enough men to pair a 5v5: {thin or 'both rosters are thin'}. "
+            "EA's club roster only lists actual members — guests never appear on it, "
+            "so a club that runs guests can't be lined up from public data.")
         return
     block = clubmod.format_matchup(a, b, pairs)
     read = None
