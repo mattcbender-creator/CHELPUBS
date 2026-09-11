@@ -153,7 +153,11 @@ def format_block(s: dict) -> str:
     to say what they mean, not to recompute them."""
     lines = [f"Club: {s['name']}  (platform {s['platform']}, division {s['division'] or 'unknown'})"]
     if s["w"] is not None:
-        lines.append(f"Record: {s['w']:.0f}-{s['l']:.0f}-{s['otl'] or 0:.0f} ({s['gp']:.0f} GP)")
+        # Written out, not "50-4-1": a text-to-speech voice reads dashed
+        # numbers as a date, and the model tends to echo whatever form it sees.
+        lines.append(f"Record: {s['w']:.0f} wins, {s['l']:.0f} losses, {s['otl'] or 0:.0f} overtime losses "
+                     f"({s['gp']:.0f} GP) -- say it like a broadcaster: "
+                     f"\"{s['w']:.0f}, {s['l']:.0f} and {s['otl'] or 0:.0f}\"")
     if s["gf"] is not None and s["ga"] is not None and s["gp"]:
         lines.append(f"Goals for {s['gf']:.0f} ({s['gf'] / s['gp']:.2f}/GP), against {s['ga']:.0f} "
                      f"({s['ga'] / s['gp']:.2f}/GP), diff {s['gf'] - s['ga']:+.0f}")
@@ -249,3 +253,27 @@ def format_matchup(a: dict, b: dict, pairs: list) -> str:
         atk = f" ATTACK {AXES[p['attack']][0]} {p['ax_them'][p['attack']]}th: {ATTACK[AXES[p['attack']][1]]}" if p["attack"] is not None else ""
         lines.append(f"  our {p['slot']} {p['us']['name']} ({an}) vs their {p['vs']} {p['them']['name']} ({bn}).{atk}")
     return "\n".join(lines)
+
+
+_REC3 = re.compile(r"\b(\d{1,3})-(\d{1,3})-(\d{1,3})\b")
+_REC2 = re.compile(r"\b(\d{1,3})-(\d{1,3})\b")
+
+
+def clean_name(q: str) -> str:
+    """A club name as the user meant it. Discord on mobile sometimes hands
+    back the dropdown's display text instead of its value, so anything we
+    ever decorated a label with (" — 50-4-1, div 2") is stripped here."""
+    q = re.split(r"\s+[—–]\s+", q, maxsplit=1)[0]
+    q = re.sub(r",\s*div\s+\S+$", "", q, flags=re.I)
+    return q.strip()
+
+
+def speakable(text: str) -> str:
+    """Records for a voice: '50-4-1' -> '50, 4 and 1', '50-4' -> '50 and 4'.
+    Spoken, those are what a broadcaster says; dashed, a TTS voice reads
+    them as a date."""
+    text = _REC3.sub(lambda m: f"{m[1]}, {m[2]} and {m[3]}", text)
+    # Two-part: a record ("41-9") is spoken "41 and 9"; a score ("3-2") is
+    # left alone -- "three and two" is wrong and TTS reads "3-2" fine.
+    text = _REC2.sub(lambda m: f"{m[1]} and {m[2]}" if int(m[1]) >= 10 else m[0], text)
+    return text

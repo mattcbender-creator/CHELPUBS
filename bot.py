@@ -803,14 +803,17 @@ async def club_autocomplete(interaction: discord.Interaction, current: str):
         clubs = await asyncio.wait_for(ea.search_clubs(current, limit=25), timeout=2.5)
     except (asyncio.TimeoutError, Exception):
         return []
-    out = []
+    # Label == value, on purpose. The first version decorated the label with
+    # the record and division, and Discord on mobile handed THAT back as the
+    # club name ("WILDMAN HOCKEY — 50-4-1, div 2"), which EA answered with a
+    # 500. The plain name is what gets searched either way.
+    out, seen = [], set()
     for c in clubs:
-        name = str(c.get("name") or "")
-        if not name:
+        name = str(c.get("name") or "").strip()
+        if not name or name.lower() in seen:
             continue
-        rec = f" — {c['record']}" if c.get("record") else ""
-        div = f", div {c['currentDivision']}" if c.get("currentDivision") not in (None, "") else ""
-        out.append(app_commands.Choice(name=f"{name}{rec}{div}"[:100], value=name[:100]))
+        seen.add(name.lower())
+        out.append(app_commands.Choice(name=name[:100], value=name[:100]))
     return out[:25]
 
 
@@ -819,7 +822,9 @@ async def _club_voice_file(voice, block: str) -> tuple[discord.File | None, str 
     Same voices and length rules as /pubscout; the prompts get told it's a
     team, not a player, since the scout prompts were written for one guy."""
     team_note = ("This report is about a CLUB (a whole team and its roster), not one player. "
-                 "Talk about the team; name a player or two from the roster if it helps.")
+                 "Talk about the team; name a player or two from the roster if it helps. "
+                 "Say a record the way a broadcaster does -- \"fifty, four and one\" -- never "
+                 "with dashes, and never as a date.")
     try:
         if voice.value == "narrator":
             with_kid = random.random() < vc.NARRATOR_KID_PROB
@@ -838,6 +843,7 @@ async def _club_voice_file(voice, block: str) -> tuple[discord.File | None, str 
                 elif with_kid:
                     turns = vc.parse_narrator_script(raw)
                     raw = f"NARRATOR: {turns[0][1]}" if turns else raw
+            raw = clubmod.speakable(raw)
             audio, _ = await vc.speak_narrator(raw, max_words=vc.narrator_word_cap(with_kid))
             log_clip("narrator", " ".join(ln for _, ln in vc.parse_narrator_script(raw)), audio)
             return discord.File(io.BytesIO(audio), filename=f"{CLIP_BRAND}-clubscout-narrator.mp3"), None
@@ -849,7 +855,7 @@ async def _club_voice_file(voice, block: str) -> tuple[discord.File | None, str 
         resp = await call_llm(messages=[{"role": "system", "content": sys_prompt},
                                         {"role": "user", "content": block}],
                               max_tokens=220, temperature=0.9)
-        script = (resp.choices[0].message.content or "").strip()
+        script = clubmod.speakable((resp.choices[0].message.content or "").strip())
         cap = min(max_words, vc.word_cap(voice.value))
         if ramped:
             audio, _ = await vc.speak_ramped(
@@ -883,7 +889,7 @@ async def clubscout(interaction: discord.Interaction, club: str,
     card goes out as soon as it renders and the clip follows, so nobody
     waits a minute for a picture that was ready in five seconds."""
     await interaction.response.defer()
-    q = club.strip()
+    q = clubmod.clean_name(club)
     try:
         clubs = await ea.search_clubs(q, limit=5)
     except ea.EAUnavailable as e:
@@ -910,6 +916,11 @@ async def clubscout(interaction: discord.Interaction, club: str,
         return
     block = clubmod.format_block(s)
 
+    # The clip is the slow part (a model call, then 20-40s of TTS), so it
+    # starts NOW, alongside the card's own read and render, instead of after
+    # the card has gone out. The card still goes out the moment it's ready.
+    voice_task = asyncio.create_task(_club_voice_file(voice, block)) if voice else None
+
     read = None
     try:
         resp = await call_llm(messages=[{"role": "system", "content": CLUB_READ_PROMPT},
@@ -923,16 +934,28 @@ async def clubscout(interaction: discord.Interaction, club: str,
         png = await asyncio.to_thread(card.render_club, s, read)
     except Exception as e:
         await interaction.followup.send(f"Card render shit the bed: `{type(e).__name__}: {e}`")
+        if voice_task:
+            voice_task.cancel()
         return
     safe = re.sub(r"[^A-Za-z0-9_-]+", "_", s["name"]).strip("_") or "club"
-    await interaction.followup.send(file=discord.File(io.BytesIO(png), filename=f"{CLIP_BRAND}-clubscout-{safe}.png"))
+    note = f"🎙️ {voice.name} clip on the way, about half a minute." if voice else None
+    msg = await interaction.followup.send(
+        content=note, file=discord.File(io.BytesIO(png), filename=f"{CLIP_BRAND}-clubscout-{safe}.png"),
+        wait=True)
 
-    if voice:
-        f, err = await _club_voice_file(voice, block)
+    if voice_task:
+        f, err = await voice_task
         if f:
             await interaction.followup.send(file=f)
+            try:
+                await msg.edit(content=None)
+            except Exception:
+                pass
         else:
-            await interaction.followup.send(f"The **{voice.name}** clip didn't come back: `{err}`"[:2000])
+            try:
+                await msg.edit(content=f"The **{voice.name}** clip didn't come back: `{err}`"[:2000])
+            except Exception:
+                await interaction.followup.send(f"The **{voice.name}** clip didn't come back: `{err}`"[:2000])
 
 
 # ----------------------------------------------------------------- matchup
@@ -947,6 +970,7 @@ shitter) and never invent a stat. Blunt, readable, not a bit."""
 
 async def _load_club(name: str) -> tuple[dict | None, str | None]:
     """(summary, error). Search + roster/stats/matches for one club."""
+    name = clubmod.clean_name(name)
     try:
         clubs = await ea.search_clubs(name, limit=3)
     except ea.EAUnavailable as e:
