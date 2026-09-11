@@ -12,6 +12,9 @@ card_*.png
 # local backups -- git history replaces these
 backups/
 
+# local reference material only -- never commit or push
+git ignore/
+
 __pycache__/
 *.pyc
 .venv/
