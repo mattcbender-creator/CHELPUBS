@@ -991,6 +991,34 @@ Use only the card's grade words (elite / stud / solid / mid / weak / bad /
 shitter) and never invent a stat. Blunt, readable, not a bit."""
 
 
+async def _augment_guests(club_id: str, detail: dict) -> None:
+    """Fill a thin roster with the players who actually dressed for this
+    club in harvested matches. EA's members endpoint hides guests, so a
+    guest-run club (seen live: a club whose whole five are guests, roster
+    of ONE) gets its real lineup from the match feed instead."""
+    members = detail.get("members") or []
+    if len([m for m in members if ea._num(m.get("gamesplayed")) > 0]) >= 6:
+        return
+    on_roster = {str(m.get("name", "")).lower() for m in members}
+    known = await asyncio.to_thread(scout.dressed, str(club_id))
+    missing = {n: m for n, m in known.items() if n.lower() not in on_roster}
+    if not missing:
+        return
+    # careers we don't hold yet: one lookup each, same call a /pubscout makes
+    to_fetch = [n for n, m in missing.items() if not m][:10]
+    if to_fetch:
+        fetched = await asyncio.gather(*(ea.search_player(n) for n in to_fetch),
+                                       return_exceptions=True)
+        got = {n: m for n, m in zip(to_fetch, fetched) if isinstance(m, dict)}
+        missing.update(got)
+        if got:
+            asyncio.create_task(asyncio.to_thread(harvest.add_careers, got))
+    added = [m for m in missing.values() if m]
+    if added:
+        detail["members"] = members + added
+        print(f"[matchup] club {club_id}: +{len(added)} dressed guests from harvest", flush=True)
+
+
 async def _load_club(name: str) -> tuple[dict | None, str | None]:
     """(summary, error). Search + roster/stats/matches for one club."""
     name = clubmod.clean_name(name)
@@ -1007,8 +1035,10 @@ async def _load_club(name: str) -> tuple[dict | None, str | None]:
     except Exception as e:
         print(f"[matchup] detail failed for {c.get('name')!r}: {type(e).__name__}: {e}")
         return None, f"Found **{c.get('name')}** but EA wouldn't hand over its roster (`{type(e).__name__}`)."
-    asyncio.create_task(asyncio.to_thread(
-        harvest.absorb, str(c["clubId"]), detail.get("matches"), detail.get("members")))
+    # bank first (so dressed() sees today's matches), then fill from it
+    await asyncio.to_thread(
+        harvest.absorb, str(c["clubId"]), detail.get("matches"), detail.get("members"))
+    await _augment_guests(str(c["clubId"]), detail)
     s = clubmod.summarize(c, detail)
     if not s["skaters"]:
         return None, f"**{s['name']}** has nobody with games played this season, so there's nothing to match up."

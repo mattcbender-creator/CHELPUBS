@@ -172,6 +172,20 @@ def render(cid_a: str, cid_b: str, title: str) -> str:
     return html.replace("__TITLE__", title).replace("__DATA__", json.dumps(pack, separators=(",", ":")))
 
 
+def dressed(cid: str) -> dict:
+    """Everyone who has dressed for this club in stored matches, mapped to
+    the career record we hold for them (None when we don't have one yet).
+    This is how a guest-heavy club gets a real lineup: EA's roster endpoint
+    only lists members, but the match feed names who actually played."""
+    store = harvest.load_store()
+    names = set()
+    for m in store["matches"].values():
+        for p in ((m.get("players") or {}).get(str(cid)) or {}).values():
+            if p.get("playername"):
+                names.add(p["playername"])
+    return {n: store["careers"].get(n) for n in sorted(names)}
+
+
 def _form_line(nm: str, rows: dict, min_gp: int = 2) -> str | None:
     """One data-only line of recent harvested form for a player, or None
     when the sample is under the floor. Private games preferred."""

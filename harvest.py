@@ -86,6 +86,17 @@ def absorb(club_id: str, matches: list | None, members: list | None) -> int:
     return added
 
 
+def add_careers(careers: dict) -> None:
+    """Bank career records fetched elsewhere (guest lookups)."""
+    careers = {n: m for n, m in careers.items() if m}
+    if not careers:
+        return
+    with _LOCK:
+        store = load_store()
+        store["careers"].update(careers)
+        save_store(store)
+
+
 def harvest(club_ids: list[str], platform: str = "common-gen5") -> dict:
     """One polite pass over the tracked clubs. Returns a small report.
 
