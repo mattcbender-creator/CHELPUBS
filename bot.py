@@ -15,7 +15,10 @@ import build_pool
 import card
 import club as clubmod
 import ea
+import harvest
+import scout
 import voice as vc
+from aiohttp import web
 
 load_dotenv()
 
@@ -1231,6 +1234,51 @@ async def pool_rebuild_loop():
         await asyncio.sleep(900)
 
 
+# ------------------------------------------------------- scout board (web)
+# The live scout board: a harvester accumulates EA's shallow match feeds for
+# the tracked clubs (the feed only holds ~5 games per mode, so history exists
+# only if we poll before the window slides), and an aiohttp server renders
+# the board from the accumulated store. Railway routes its domain to PORT.
+SCOUT_CLUBS = [c.strip() for c in os.getenv("SCOUT_CLUBS", "12521,22423").split(",") if c.strip()]
+SCOUT_TITLE = os.getenv("SCOUT_TITLE", "Wildman vs Entourage")
+HARVEST_EVERY = int(os.getenv("HARVEST_EVERY", "14400"))  # 4h
+
+
+async def harvest_loop():
+    await client.wait_until_ready()
+    while not client.is_closed():
+        try:
+            await asyncio.to_thread(harvest.harvest, SCOUT_CLUBS)
+        except ea.RateLimited as e:
+            print(f"[harvest] rate limited, backing off: {e}", flush=True)
+            await asyncio.sleep(3600)
+            continue
+        except Exception as e:
+            print(f"[harvest] failed: {type(e).__name__}: {e}", flush=True)
+        await asyncio.sleep(HARVEST_EVERY)
+
+
+async def _board(request):
+    a, b = SCOUT_CLUBS[0], SCOUT_CLUBS[1] if len(SCOUT_CLUBS) > 1 else SCOUT_CLUBS[0]
+    html = await asyncio.to_thread(scout.render, a, b, SCOUT_TITLE)
+    return web.Response(text=html, content_type="text/html")
+
+
+async def _health(request):
+    return web.Response(text="ok")
+
+
+async def scout_web():
+    app = web.Application()
+    app.router.add_get("/", _board)
+    app.router.add_get("/health", _health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", "8080"))
+    await web.TCPSite(runner, "0.0.0.0", port).start()
+    print(f"[scout] board serving on :{port}", flush=True)
+
+
 @tree.command(name="rebuild-pool", description="Re-sample EA and rebuild the percentile pool now (admins)")
 @app_commands.default_permissions(administrator=True)
 async def rebuild_pool_cmd(interaction: discord.Interaction):
@@ -1316,5 +1364,8 @@ async def on_ready():
           f"{p.get('built', '?')} ({pool_age_days():.0f} days old)", flush=True)
     if not getattr(client, "_pool_task", None):
         client._pool_task = client.loop.create_task(pool_rebuild_loop())
+    if not getattr(client, "_scout_task", None):
+        client._scout_task = client.loop.create_task(harvest_loop())
+        client._scout_web = client.loop.create_task(scout_web())
 
 client.run(DISCORD_BOT_TOKEN)
