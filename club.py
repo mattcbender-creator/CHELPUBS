@@ -187,14 +187,11 @@ def format_block(s: dict) -> str:
 SLOTS = ["LW", "C", "RW", "LD", "RD"]
 # Who lines up against whom at 5v5: a winger drives at the far-side D.
 PAIRS = [("LW", "RD"), ("C", "C"), ("RW", "LD"), ("LD", "RW"), ("RD", "LW")]
-ATTACK = {
-    "scoring": "give him the shot, take away his pass",
-    "playmaking": "he's a shooter -- cheat to the shot lane",
-    "impact": "he's on the ice for goals against: attack his side",
-    "physicality": "finish every check, he loses the boards",
-    "discipline": "bait him -- he takes the penalty",
-}
 AXES = SHAPE_AXES  # scoring, playmaking, impact, physicality, discipline
+# Matchup math ignores physicality: at the level using /matchup, hits are
+# noise -- it stays on the radar as data but never drives an overall or a
+# weakest-skill pick, and the card prescribes nothing (numbers only).
+MATCH_KEYS = [i for i, (_, k) in enumerate(AXES) if k != "physicality"]
 
 
 def player_axes(r: dict) -> list[int | None]:
@@ -233,10 +230,10 @@ def pairings(us: dict, them: dict) -> list[dict]:
         if not a or not b:
             continue
         ax_a, ax_b = player_axes(a), player_axes(b)
-        oa = [p for p in ax_a if p is not None]
-        ob = [p for p in ax_b if p is not None]
-        weak = min((i for i, p in enumerate(ax_b) if p is not None), key=lambda i: ax_b[i], default=None)
-        strong = max((i for i, p in enumerate(ax_a) if p is not None), key=lambda i: ax_a[i], default=None)
+        oa = [ax_a[i] for i in MATCH_KEYS if ax_a[i] is not None]
+        ob = [ax_b[i] for i in MATCH_KEYS if ax_b[i] is not None]
+        weak = min((i for i in MATCH_KEYS if ax_b[i] is not None), key=lambda i: ax_b[i], default=None)
+        strong = max((i for i in MATCH_KEYS if ax_a[i] is not None), key=lambda i: ax_a[i], default=None)
         out.append({
             "slot": ours, "vs": theirs, "us": a, "them": b,
             "ax_us": ax_a, "ax_them": ax_b,
@@ -257,7 +254,8 @@ def format_matchup(a: dict, b: dict, pairs: list) -> str:
     for p in pairs:
         an = ", ".join(f"{lbl} {v}" for (lbl, _), v in zip(AXES, p["ax_us"]) if v is not None)
         bn = ", ".join(f"{lbl} {v}" for (lbl, _), v in zip(AXES, p["ax_them"]) if v is not None)
-        atk = f" ATTACK {AXES[p['attack']][0]} {p['ax_them'][p['attack']]}th: {ATTACK[AXES[p['attack']][1]]}" if p["attack"] is not None else ""
+        atk = (f" His lowest graded skill: {AXES[p['attack']][0]} {p['ax_them'][p['attack']]}th percentile."
+               if p["attack"] is not None else "")
         lines.append(f"  our {p['slot']} {p['us']['name']} ({an}) vs their {p['vs']} {p['them']['name']} ({bn}).{atk}")
     return "\n".join(lines)
 

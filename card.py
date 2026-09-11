@@ -919,25 +919,26 @@ POS_ORDER = ["C", "RW", "RD", "LD", "LW"]
 
 
 def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
-                   custom: bool = False) -> bytes:
-    """ONE radar. Five axes = the five positions. On each axis your man at
-    that position (blue) and the man he lines up against (amber), both as
-    their overall percentile, so the gap on every axis IS the matchup."""
+                   custom: bool = False, note: str | None = None) -> bytes:
+    """Numbers only, no prescriptions. Main radar is the PLAY-STYLE overlay
+    (five-man mean percentile per skill); below it, one block per 5v5
+    pairing showing both men's full axis lines as paired bars -- the
+    player-vs-player matchup drawn, not described. Their weakest graded
+    skill (physicality excluded -- noise at this level) prints red; that is
+    the only emphasis. `read` is accepted for compatibility and ignored."""
     import club as clubmod
-    f_kicker = _font("bold", 17); f_sub = _font("medium", 18); f_read = _font("medium", 25)
-    f_h = _font("bold", 16); f_pos = _font("black", 16); f_nm = _font("bold", 15)
-    f_edge = _font("black", 16); f_plan = _font("medium", 16); f_plan_b = _font("bold", 16)
+    f_kicker = _font("bold", 17); f_sub = _font("medium", 18)
+    f_h = _font("bold", 16); f_nm = _font("bold", 22); f_ax = _font("bold", 15)
+    f_val = _font("black", 16); f_edge = _font("black", 18); f_note = _font("medium", 16)
 
-    tmp = ImageDraw.Draw(Image.new("RGB", (10, 10)))
-    read_lines = _wrap(tmp, read, f_read, W - 2 * PAD - 8, max_lines=4) if read else []
     by_slot = {p["slot"]: p for p in pairs}
     order = [s for s in POS_ORDER if s in by_slot]
-    R = 175
-    plan = [by_slot[s] for s in ("LW", "C", "RW", "LD", "RD") if s in by_slot and by_slot[s]["attack"] is not None]
-
-    H = (150 + 70 + (len(read_lines) * 34 + 20 if read_lines else 10)
-         + 50 + 2 * R + 308
-         + (40 + len(plan) * 34 + 30 if plan else 0)
+    R = 150
+    PAIR_H = 66 + len(clubmod.AXES) * 30 + 24
+    H = (150 + 70 + (34 if note else 0)          # header
+         + 46 + 2 * R + 118                       # radar + axis labels
+         + 56                                     # goalie line
+         + 44 + len(order) * PAIR_H               # pairing blocks
          + 74)
     img = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(img)
@@ -963,78 +964,94 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
         _text(d, (x, y + 46), sub, f_sub, col, anchor=anchor)
     _text(d, (W / 2, y + 22), "VS", _font("black", 24), DIM, anchor="mm")
     y += 70
-    if read_lines:
-        y += 10
-        for ln in read_lines:
-            _text(d, (PAD, y), ln, f_read, TEXT)
-            y += 34
-        y += 10
-    else:
-        y += 10
+    if note:
+        _text(d, (PAD, y + 4), note, f_note, DIM)
+        y += 34
 
-    _text(d, (PAD, y), "5V5  ·  YOUR MAN AT EACH POSITION vs THE MAN HE LINES UP AGAINST", f_h, DIM)
-    ly0 = y + 26
+    # ---- main radar: play-style overlay, five-man mean percentile per axis
+    _text(d, (PAD, y), "TEAM PLAY STYLE  ·  FIVE-MAN MEAN PERCENTILE PER SKILL", f_h, DIM)
+    ly0 = y + 24
     d.rounded_rectangle([PAD, ly0 + 2, PAD + 22, ly0 + 14], radius=3, fill=BLUE_TEXT)
     _text(d, (PAD + 30, ly0 + 8), "YOU", _font("bold", 14), MUTED, anchor="lm")
     d.rounded_rectangle([PAD + 90, ly0 + 2, PAD + 112, ly0 + 14], radius=3, fill=THEM)
     _text(d, (PAD + 120, ly0 + 8), "THEM", _font("bold", 14), MUTED, anchor="lm")
-    _text(d, (PAD + 200, ly0 + 8), "overall percentile at his position  ·  grey ring = a typical player  ·  red ring = attack it",
-          _font("medium", 14), DIM, anchor="lm")
-    y += 50
-    cx, cy = W / 2, y + 178 + R
-    vals_us = [by_slot[s]["ov_us"] or 0 for s in order]
-    vals_them = [by_slot[s]["ov_them"] or 0 for s in order]
+    y += 46
+    cx, cy = W / 2, y + 96 + R
+
+    def axis_mean(side):
+        out = []
+        for i in range(len(clubmod.AXES)):
+            vs = [p[side][i] for p in pairs if p[side][i] is not None]
+            out.append(round(sum(vs) / len(vs)) if vs else 0)
+        return out
+
+    vals_us, vals_them = axis_mean("ax_us"), axis_mean("ax_them")
     _radar_multi(img, cx, cy, R, [(vals_them, THEM, THEM_FILL), (vals_us, BLUE_TEXT, US_FILL)])
     d = ImageDraw.Draw(img)
-    # attack rings on their shape
-    ov = Image.new("RGBA", img.size, (0, 0, 0, 0)); od = ImageDraw.Draw(ov)
-    for i, s in enumerate(order):
-        p = by_slot[s]
-        if p["attack"] is not None:
-            vx, vy = radar_points(cx, cy, R, [max(v, 3) for v in vals_them])[i]
-            od.ellipse([vx - 9, vy - 9, vx + 9, vy + 9], outline=(*RED, 255), width=3)
-    img.paste(Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB"))
-    d = ImageDraw.Draw(img)
-
-    def short(nm, maxw, font):
-        while d.textlength(nm, font=font) > maxw and len(nm) > 4:
-            nm = nm[:-2].rstrip() + "…"
-        return nm
-
-    n = len(order)
-    for i, (s, (x, yv)) in enumerate(zip(order, radar_points(cx, cy, R, [100] * n))):
-        p = by_slot[s]
+    n = len(clubmod.AXES)
+    for i, (lbl, _) in enumerate(clubmod.AXES):
         ang = -math.pi / 2 + 2 * math.pi * i / n
         dx, dy = math.cos(ang), math.sin(ang)
-        anchor = "la" if dx > 0.3 else ("ra" if dx < -0.3 else "ma")
-        lx = x + dx * 26
-        # four lines, 22px each: above the top vertex, beside the sides,
-        # below the bottom pair
-        ly = yv + dy * 26 - (96 if dy < -0.5 else (34 if abs(dy) <= 0.5 else 0))
-        maxw = 214
-        _text(d, (lx, ly), f"{s}  vs their {p['vs']}", f_pos, DIM, anchor=anchor)
-        _text(d, (lx, ly + 22), short(p["us"]["name"], maxw, f_nm), f_nm, BLUE_TEXT, anchor=anchor)
-        _text(d, (lx, ly + 44), short(p["them"]["name"], maxw, f_nm), f_nm, THEM, anchor=anchor)
+        x, yv = cx + dx * (R + 34), cy + dy * (R + 30)
+        anchor = "ma"
+        _text(d, (x, yv - 10), lbl, f_ax, DIM, anchor=anchor)
+        w_us = d.textlength(str(vals_us[i]), font=f_val)
+        w_mid = d.textlength(" · ", font=f_val)
+        total = w_us + w_mid + d.textlength(str(vals_them[i]), font=f_val)
+        x0 = x - total / 2
+        _text(d, (x0, yv + 12), str(vals_us[i]), f_val, BLUE_TEXT)
+        _text(d, (x0 + w_us, yv + 12), " · ", f_val, DIM)
+        _text(d, (x0 + w_us + w_mid, yv + 12), str(vals_them[i]), f_val, THEM)
+    y = cy + R + 88
+
+    # ---- goalies, numbers only
+    def gline(s):
+        g = next((r for r in s.get("goalies", []) if r["rates"].get("savepct")), None)
+        if not g:
+            return "no goalie sample"
+        pct = g.get("grade")
+        return (f"{g['name']}  {g['rates']['savepct']:.3f} sv%  {g['rates'].get('gaa', 0):.2f} GAA"
+                + (f"  ·  {pct}th" if pct is not None else ""))
+    _text(d, (PAD, y), gline(a), f_note, BLUE_TEXT)
+    _text(d, (W - PAD, y), gline(b), f_note, THEM, anchor="ra")
+    _text(d, (W / 2, y), "IN NET", f_h, DIM, anchor="ma")
+    y += 56
+
+    # ---- five pairing blocks: both men's full axis lines as paired bars
+    _text(d, (PAD, y), "5V5  ·  YOUR MAN AT EACH POSITION vs THE MAN HE LINES UP AGAINST  ·  "
+                       "red number = his lowest graded skill", f_h, DIM)
+    y += 44
+    bar_x0, bar_x1 = PAD + 210, W - PAD - 120
+    bw = bar_x1 - bar_x0
+    for s in order:
+        p = by_slot[s]
+        d.rounded_rectangle([PAD, y, W - PAD, y + PAIR_H - 12], radius=12, fill=(18, 21, 27))
+        yy = y + 16
+        _text(d, (PAD + 22, yy), f"{s}  vs their {p['vs']}", _font("black", 15), DIM)
+        nm_us, nm_them = p["us"]["name"], p["them"]["name"]
+        _text(d, (PAD + 22, yy + 22), nm_us, f_nm, BLUE_TEXT)
+        _text(d, (W - PAD - 22, yy + 22), nm_them, f_nm, THEM, anchor="ra")
         if p["ov_us"] is not None and p["ov_them"] is not None:
             diff = p["ov_us"] - p["ov_them"]
             lab = "EVEN" if diff == 0 else f"{'YOU' if diff > 0 else 'THEM'} +{abs(diff)}"
             col = DIM if diff == 0 else (BLUE_TEXT if diff > 0 else THEM)
-            _text(d, (lx, ly + 66), f"{p['ov_us']} vs {p['ov_them']}  ·  {lab}", f_edge, col, anchor=anchor)
-    y = cy + R + 130
-
-    if plan:
-        d.rounded_rectangle([PAD, y, W - PAD, y + 40 + len(plan) * 34 + 10], radius=12, fill=(18, 21, 27))
-        _text(d, (PAD + 22, y + 14), "WHERE TO ATTACK  ·  red ring = his weakest skill", f_h, DIM)
-        py = y + 44
-        for p in plan:
-            lbl = clubmod.AXES[p["attack"]][0]
-            tip = clubmod.ATTACK[clubmod.AXES[p["attack"]][1]]
-            _text(d, (PAD + 22, py), f"their {p['vs']}", f_plan, DIM)
-            _text(d, (PAD + 110, py), short(p["them"]["name"], 170, f_plan_b), f_plan_b, TEXT)
-            _text(d, (PAD + 300, py), f"{lbl} {p['ax_them'][p['attack']]}th", f_plan_b, RED)
-            _text(d, (PAD + 480, py), tip, f_plan, MUTED)
-            py += 34
-        y += 40 + len(plan) * 34 + 40
+            _text(d, (W / 2, yy + 26), f"{p['ov_us']} vs {p['ov_them']}  ·  {lab}", f_edge, col, anchor="ma")
+        yy = y + 66
+        for i, (lbl, key) in enumerate(clubmod.AXES):
+            vu, vt = p["ax_us"][i], p["ax_them"][i]
+            _text(d, (PAD + 22, yy + 3), lbl, f_ax, MUTED)
+            # two thin bars, blue over amber, on the same 0-100 scale
+            d.rounded_rectangle([bar_x0, yy + 2, bar_x1, yy + 9], radius=3, fill=(30, 34, 43))
+            if vu is not None and vu > 0:
+                d.rounded_rectangle([bar_x0, yy + 2, bar_x0 + bw * vu / 100, yy + 9], radius=3, fill=BLUE)
+            d.rounded_rectangle([bar_x0, yy + 13, bar_x1, yy + 20], radius=3, fill=(30, 34, 43))
+            if vt is not None and vt > 0:
+                d.rounded_rectangle([bar_x0, yy + 13, bar_x0 + bw * vt / 100, yy + 20], radius=3, fill=THEM)
+            them_col = RED if p["attack"] == i else THEM
+            _text(d, (bar_x1 + 14, yy - 3), "--" if vu is None else str(vu), f_val, BLUE_TEXT)
+            _text(d, (bar_x1 + 64, yy - 3), "--" if vt is None else str(vt), f_val, them_col)
+            yy += 30
+        y += PAIR_H
 
     fy = H - 56
     d.line([PAD, fy - 20, W - PAD, fy - 20], fill=LINE)

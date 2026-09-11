@@ -1135,17 +1135,7 @@ class MatchupView(discord.ui.View):
 
     async def rerender(self, interaction: discord.Interaction):
         pairs = clubmod.pairings(self.la, self.lb)
-        block = clubmod.format_matchup(self.a, self.b, pairs)
-        read = self.read
-        try:
-            resp = await call_llm(messages=[{"role": "system", "content": MATCHUP_READ_PROMPT},
-                                            {"role": "user", "content": block}],
-                                  max_tokens=180, temperature=0.6)
-            read = (resp.choices[0].message.content or "").strip() or read
-        except Exception as e:
-            print(f"[matchup] re-read failed: {type(e).__name__}: {e}")
-        self.read = read
-        png = await asyncio.to_thread(card.render_matchup, self.a, self.b, pairs, read, self.custom)
+        png = await asyncio.to_thread(card.render_matchup, self.a, self.b, pairs, None, self.custom)
         self._build()
         safe = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{self.a['name']}-vs-{self.b['name']}").strip("_")
         await interaction.edit_original_response(
@@ -1184,28 +1174,20 @@ async def matchup(interaction: discord.Interaction, you: str, them: str):
             "EA's club roster only lists actual members — guests never appear on it, "
             "so a club that runs guests can't be lined up from public data.")
         return
-    block = clubmod.format_matchup(a, b, pairs)
-    read = None
+    # No model read on the matchup: the audience is competitive players who
+    # want the numbers, and a model summarizing numbers drifts into coaching.
+    # The receipt says where each default five came from, so a wrong-looking
+    # lineup reads as "thin sample", not "broken product".
+    src = " · ".join(f"{s['name']}: {'lineup from last ' + str(n) + ' matches' if n else 'lineup by career games (no matches banked)'}"
+                     for s, n in ((a, gs_a), (b, gs_b)))
     try:
-        resp = await call_llm(messages=[{"role": "system", "content": MATCHUP_READ_PROMPT},
-                                        {"role": "user", "content": block}],
-                              max_tokens=180, temperature=0.6)
-        read = (resp.choices[0].message.content or "").strip()
-    except Exception as e:
-        print(f"[matchup] read failed: {type(e).__name__}: {e}")
-    try:
-        png = await asyncio.to_thread(card.render_matchup, a, b, pairs, read)
+        png = await asyncio.to_thread(card.render_matchup, a, b, pairs, None, False, src)
     except Exception as e:
         await interaction.followup.send(f"Card render shit the bed: `{type(e).__name__}: {e}`")
         return
     safe = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{a['name']}-vs-{b['name']}").strip("_")
-    # the receipt: where each default five came from, so a wrong-looking
-    # lineup reads as "thin sample", not "broken product"
-    src = " · ".join(f"{s['name']}: {'last ' + str(n) + ' matches' if n else 'career games (no matches banked)'}"
-                     for s, n in ((a, gs_a), (b, gs_b)))
-    view = MatchupView(a, b, la, lb, read)
+    view = MatchupView(a, b, la, lb, None)
     view.message = await interaction.followup.send(
-        content=f"-# Lineups from {src}. Buttons re-pick any slot.",
         file=discord.File(io.BytesIO(png), filename=f"{CLIP_BRAND}-matchup-{safe}.png"), view=view, wait=True)
 
 

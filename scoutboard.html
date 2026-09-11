@@ -183,7 +183,7 @@ let lineup={[WM]:{...D.clubs[WM].default},[EN]:{...D.clubs[EN].default}};
 let baseline=null;
 const P=n=>n?D.players[n]:null;
 const mean=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:null;
-const overall=n=>{const p=P(n);if(!p)return null;const v=Object.values(p.axes||{});return v.length?Math.round(mean(v)):null};
+const overall=n=>{const p=P(n);if(!p)return null;const v=Object.entries(p.axes||{}).filter(([k])=>k!=="physicality").map(([,x])=>x);return v.length?Math.round(mean(v)):null};
 const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;");
 const tier=p=>p>=90?"ELITE":p>=78?"STUD":p>=62?"SOLID":p>=45?"MID":p>=30?"WEAK":p>=15?"BAD":"SHITTER";
 const tcol=p=>p>=62?"var(--good)":p>=45?"var(--mid)":"var(--bad)";
@@ -269,11 +269,11 @@ function pairHTML(){
     const hot=gap!=null&&Math.abs(gap)>=15;
     let chips="";
     if(ep&&ep.axes&&Object.keys(ep.axes).length){
-      const weak=Object.entries(ep.axes).sort((a,b)=>a[1]-b[1])[0];
+      const weak=Object.entries(ep.axes).filter(([k])=>k!=="physicality").sort((a,b)=>a[1]-b[1])[0];
       chips+=`<span class="cap">${esc(en)} low:</span><span class="axchip" style="color:${tcol(weak[1])};border:1px solid ${tcol(weak[1])}44">${AXNAME[weak[0]]} ${weak[1]}</span>`;
     }
     if(wp&&wp.axes&&Object.keys(wp.axes).length){
-      const weak=Object.entries(wp.axes).sort((a,b)=>a[1]-b[1])[0];
+      const weak=Object.entries(wp.axes).filter(([k])=>k!=="physicality").sort((a,b)=>a[1]-b[1])[0];
       chips+=`<span class="cap">${esc(wn)} low:</span><span class="axchip" style="color:${tcol(weak[1])};border:1px solid ${tcol(weak[1])}44">${AXNAME[weak[0]]} ${weak[1]}</span>`;
     }
     h+=`<div class="pair${hot?" hot":""}"><div>
