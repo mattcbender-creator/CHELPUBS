@@ -878,27 +878,49 @@ def render_club(s: dict, read: str | None = None) -> bytes:
 def _radar_multi(img, cx, cy, r, series, labels=None, f_lbl=None, ring_axis=None):
     """Rings plus one or more shapes: series = [(values, rgb, rgba_fill)].
     ring_axis draws a red ring on that vertex of the LAST series -- the
-    axis to attack. Small radars (r < 80) drop the vertex dots."""
+    axis to attack. Small radars (r < 80) drop the vertex dots.
+
+    Every fill gets its OWN composited layer. PIL's draw REPLACES pixels
+    instead of blending them, so both shapes on one overlay meant the
+    second fill erased the first wherever they overlapped -- which is most
+    of the pentagon. Lowering the alpha only made both paler; it could
+    never let one read through the other. One layer per fill does.
+    """
     n = len(series[0][0])
-    ov = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    d = ImageDraw.Draw(ov)
-    for ring in (25, 50, 75, 100):
-        col = (70, 76, 92, 255) if ring == 50 else (*LINE, 255)
-        d.polygon(radar_points(cx, cy, r, [ring] * n), outline=col)
-    for x, y in radar_points(cx, cy, r, [100] * n):
-        d.line([(cx, cy), (x, y)], fill=(*LINE, 255), width=1)
-    for vals, col, fill in series:
-        pts = radar_points(cx, cy, r, [max(v or 0, 3) for v in vals])
-        d.polygon(pts, fill=fill)
-        d.line(pts + [pts[0]], fill=(*col, 255), width=3 if r >= 80 else 2, joint="curve")
-        if r >= 80:
-            for x, y in pts:
-                d.ellipse([x - 5, y - 5, x + 5, y + 5], fill=(*col, 255), outline=(*BG, 255), width=2)
-    if ring_axis is not None:
-        vals = series[-1][0]
-        vx, vy = radar_points(cx, cy, r, [max(v or 0, 3) for v in vals])[ring_axis]
-        d.ellipse([vx - 8, vy - 8, vx + 8, vy + 8], outline=(*RED, 255), width=3)
-    img.paste(Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB"))
+    base = img.convert("RGBA")
+
+    def layer(paint):
+        """Draw on a fresh transparent layer, then alpha-composite it."""
+        nonlocal base
+        ov = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        paint(ImageDraw.Draw(ov))
+        base = Image.alpha_composite(base, ov)
+
+    def grid(d):
+        for ring in (25, 50, 75, 100):
+            col = (70, 76, 92, 255) if ring == 50 else (*LINE, 255)
+            d.polygon(radar_points(cx, cy, r, [ring] * n), outline=col)
+        for x, y in radar_points(cx, cy, r, [100] * n):
+            d.line([(cx, cy), (x, y)], fill=(*LINE, 255), width=1)
+
+    shapes = [(radar_points(cx, cy, r, [max(v or 0, 3) for v in vals]), col, fill)
+              for vals, col, fill in series]
+    layer(grid)
+    for pts, _col, fill in shapes:                     # translucent fills, blended
+        layer(lambda d, p=pts, f=fill: d.polygon(p, fill=f))
+
+    def marks(d):                                      # opaque edges on top
+        for pts, col, _fill in shapes:
+            d.line(pts + [pts[0]], fill=(*col, 255), width=3 if r >= 80 else 2, joint="curve")
+            if r >= 80:
+                for x, y in pts:
+                    d.ellipse([x - 5, y - 5, x + 5, y + 5], fill=(*col, 255), outline=(*BG, 255), width=2)
+        if ring_axis is not None:
+            vx, vy = shapes[-1][0][ring_axis]
+            d.ellipse([vx - 8, vy - 8, vx + 8, vy + 8], outline=(*RED, 255), width=3)
+
+    layer(marks)
+    img.paste(base.convert("RGB"))
     if labels:
         d = ImageDraw.Draw(img)
         for i, (lbl, (x, y)) in enumerate(zip(labels, radar_points(cx, cy, r, [100] * n))):
@@ -909,10 +931,12 @@ def _radar_multi(img, cx, cy, r, series, labels=None, f_lbl=None, ring_axis=None
 
 
 THEM = (196, 132, 31)             # the other club: amber outline, never red (red means "attack here")
-# Semi-transparent fills: the two shapes overlap almost everywhere, so
-# both must stay readable through each other; the strokes carry the edges.
-THEM_FILL = (196, 132, 31, 52)
-US_FILL = (0, 105, 250, 55)
+# Semi-transparent fills: the two shapes overlap almost everywhere, so both
+# must stay readable through each other. These blend for real now (each fill
+# is its own composited layer in _radar_multi), so the overlap is a third
+# colour carrying both hues rather than whichever was drawn last.
+THEM_FILL = (196, 132, 31, 92)
+US_FILL = (0, 105, 250, 96)
 
 
 # Around the pentagon the way the ice reads: C at the top, wings either
