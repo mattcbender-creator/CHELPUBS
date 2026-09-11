@@ -706,7 +706,7 @@ def render_club(s: dict, read: str | None = None) -> bytes:
     f_foot = _font("bold", 17)
 
     tmp = ImageDraw.Draw(Image.new("RGB", (10, 10)))
-    read_lines = _wrap(tmp, read, f_read, W - 2 * PAD - 8) if read else []
+    read_lines = _wrap(tmp, read, f_read, W - 2 * PAD - 8, max_lines=4) if read else []
 
     tiles = []
     if s.get("gf") is not None and s.get("ga") is not None:
@@ -851,6 +851,183 @@ def render_club(s: dict, read: str | None = None) -> bytes:
     _text(d, (PAD, y), "chelscout.net", f_foot, BLUE_TEXT)
     _text(d, (W - PAD, y), "SCOUT SMARTER. CHIRP RESPONSIBLY.", f_foot, DIM, anchor="ra")
 
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+# --------------------------------------------------------------- matchup
+def _radar_multi(img, cx, cy, r, series, labels=None, f_lbl=None, ring_axis=None):
+    """Rings plus one or more shapes: series = [(values, rgb, rgba_fill)].
+    ring_axis draws a red ring on that vertex of the LAST series -- the
+    axis to attack. Small radars (r < 80) drop the vertex dots."""
+    n = len(series[0][0])
+    ov = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(ov)
+    for ring in (25, 50, 75, 100):
+        col = (70, 76, 92, 255) if ring == 50 else (*LINE, 255)
+        d.polygon(radar_points(cx, cy, r, [ring] * n), outline=col)
+    for x, y in radar_points(cx, cy, r, [100] * n):
+        d.line([(cx, cy), (x, y)], fill=(*LINE, 255), width=1)
+    for vals, col, fill in series:
+        pts = radar_points(cx, cy, r, [max(v or 0, 3) for v in vals])
+        d.polygon(pts, fill=fill)
+        d.line(pts + [pts[0]], fill=(*col, 255), width=3 if r >= 80 else 2, joint="curve")
+        if r >= 80:
+            for x, y in pts:
+                d.ellipse([x - 5, y - 5, x + 5, y + 5], fill=(*col, 255), outline=(*BG, 255), width=2)
+    if ring_axis is not None:
+        vals = series[-1][0]
+        vx, vy = radar_points(cx, cy, r, [max(v or 0, 3) for v in vals])[ring_axis]
+        d.ellipse([vx - 8, vy - 8, vx + 8, vy + 8], outline=(*RED, 255), width=3)
+    img.paste(Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB"))
+    if labels:
+        d = ImageDraw.Draw(img)
+        for i, (lbl, (x, y)) in enumerate(zip(labels, radar_points(cx, cy, r, [100] * n))):
+            a = -math.pi / 2 + 2 * math.pi * i / n
+            dx, dy = math.cos(a), math.sin(a)
+            anchor = "lm" if dx > 0.3 else ("rm" if dx < -0.3 else "mm")
+            _text(d, (x + dx * 30, y + dy * 22), lbl, f_lbl, MUTED, anchor=anchor)
+
+
+THEM = (196, 132, 31)             # the other club: amber outline, never red (red means "attack here")
+THEM_FILL = (196, 132, 31, 80)
+US_FILL = (0, 105, 250, 95)
+
+
+def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None) -> bytes:
+    """Two clubs' shapes overlaid, the edge on each axis, then the five 5v5
+    pairings as small radars with the axis to attack ringed in red."""
+    import club as clubmod
+    f_kicker = _font("bold", 17); f_club = _font("black", 36); f_sub = _font("medium", 18)
+    f_read = _font("medium", 25); f_h = _font("bold", 16); f_axis = _font("bold", 14)
+    f_edge = _font("bold", 17); f_num = _font("medium", 17); f_who = _font("black", 17)
+    f_name = _font("bold", 18); f_small = _font("bold", 13); f_grade = _font("bold", 14)
+
+    tmp = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    read_lines = _wrap(tmp, read, f_read, W - 2 * PAD - 8, max_lines=4) if read else []
+    labels = [lbl for lbl, _ in clubmod.AXES]
+    ax_a = {lbl: p for lbl, _, p in a["shape"] if lbl in labels}
+    ax_b = {lbl: p for lbl, _, p in b["shape"] if lbl in labels}
+    show_shape = len(ax_a) >= 3 and len(ax_b) >= 3
+    R = 118
+    row_h = 176
+
+    H = (150 + 70 + (len(read_lines) * 34 + 20 if read_lines else 10)
+         + (2 * R + 150 if show_shape else 0)
+         + 40 + len(pairs) * row_h + 20 + 74)
+    img = Image.new("RGB", (W, H), BG)
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, W, 5], fill=BLUE)
+    mark = logo(54)
+    if mark:
+        img.paste(mark, (PAD, 32), mark)
+    _text(d, (W - PAD, 53), "PUBS MATCHUP REPORT", f_kicker, DIM, anchor="ra")
+
+    def rec(s):
+        return f"{s['w']:.0f}-{s['l']:.0f}-{s['otl'] or 0:.0f}" if s.get("w") is not None else ""
+
+    y = 104
+    half = (W - 2 * PAD) / 2 - 30
+    for s, x, anchor, col, tag in ((a, PAD, "la", BLUE_TEXT, "YOU"), (b, W - PAD, "ra", THEM, "THEM")):
+        name = s["name"]
+        f = f_club
+        for size in (36, 30, 26, 22):
+            f = _font("black", size)
+            if d.textlength(name, font=f) <= half:
+                break
+        _text(d, (x, y), name, f, TEXT, anchor=anchor)
+        sub = "  ·  ".join(t for t in (tag, rec(s), f"DIV {s['division']}" if s.get("division") not in (None, "") else "") if t)
+        _text(d, (x, y + 46), sub, f_sub, col, anchor=anchor)
+    _text(d, (W / 2, y + 22), "VS", _font("black", 24), DIM, anchor="mm")
+    y += 70
+    if read_lines:
+        y += 10
+        for ln in read_lines:
+            _text(d, (PAD, y), ln, f_read, TEXT)
+            y += 34
+        y += 10
+    else:
+        y += 10
+
+    if show_shape:
+        _text(d, (PAD, y), "TEAM SHAPE  ·  TOP 6 SKATERS + G, RANKED VS THEIR POSITIONS", f_h, DIM)
+        va = [ax_a.get(l, 0) for l in labels]
+        vb = [ax_b.get(l, 0) for l in labels]
+        cx, cy = PAD + 205, y + 56 + R
+        _radar_multi(img, cx, cy, R, [(vb, THEM, THEM_FILL), (va, BLUE_TEXT, US_FILL)], labels, f_axis)
+        d = ImageDraw.Draw(img)
+        ly = y + 2 * R + 108
+        d.rounded_rectangle([PAD, ly + 4, PAD + 22, ly + 16], radius=3, fill=BLUE_TEXT)
+        _text(d, (PAD + 30, ly + 10), "YOU", _font("bold", 15), MUTED, anchor="lm")
+        d.rounded_rectangle([PAD + 92, ly + 4, PAD + 114, ly + 16], radius=3, fill=THEM)
+        _text(d, (PAD + 122, ly + 10), "THEM", _font("bold", 15), MUTED, anchor="lm")
+        _text(d, (PAD + 205, ly + 10), "grey ring = a typical player", _font("medium", 14), DIM, anchor="lm")
+        ex = W - PAD - 330
+        _text(d, (ex, y + 36), "EDGES", f_h, DIM)
+        ey = y + 66
+        for l in labels:
+            pa, pb = ax_a.get(l), ax_b.get(l)
+            if pa is None or pb is None:
+                continue
+            diff = pa - pb
+            _text(d, (ex, ey), l, f_edge, TEXT)
+            _text(d, (ex + 150, ey), f"{pa}  vs  {pb}", f_num, MUTED)
+            if diff == 0:
+                _text(d, (W - PAD, ey), "EVEN", f_who, DIM, anchor="ra")
+            else:
+                _text(d, (W - PAD, ey), f"{'YOU' if diff > 0 else 'THEM'} +{abs(diff)}", f_who,
+                      BLUE_TEXT if diff > 0 else THEM, anchor="ra")
+            ey += 34
+        y += 2 * R + 150
+
+    _text(d, (PAD, y), "5V5 MATCHUPS  ·  YOUR MAN vs THEIRS  ·  red ring = his weakest skill, attack it", f_h, DIM)
+    y += 40
+    r = 56
+    for i, p in enumerate(pairs):
+        if i % 2 == 0:
+            d.rounded_rectangle([PAD - 12, y - 8, W - PAD + 12, y + row_h - 16], radius=12, fill=(18, 21, 27))
+        cy = y + r + 14
+        # ours (left), theirs (right), verdict in the middle
+        for who, x, vals, col, fill, ring in (("us", PAD + 20 + r, p["ax_us"], BLUE_TEXT, US_FILL, None),
+                                              ("them", W - PAD - 20 - r, p["ax_them"], THEM, THEM_FILL, p["attack"])):
+            _radar_multi(img, x, cy, r, [(vals, col, fill)], ring_axis=ring)
+            d = ImageDraw.Draw(img)
+            row = p[who]
+            tx = x + r + 18 if who == "us" else x - r - 18
+            anchor = "la" if who == "us" else "ra"
+            slot = p["slot"] if who == "us" else p["vs"]
+            _text(d, (tx, cy - 44), f"{'YOUR' if who == 'us' else 'THEIR'} {slot}", f_small, DIM, anchor=anchor)
+            nm = row["name"]
+            while d.textlength(nm, font=f_name) > 190 and len(nm) > 5:
+                nm = nm[:-2].rstrip() + "…"
+            _text(d, (tx, cy - 22), nm, f_name, TEXT, anchor=anchor)
+            ov = p["ov_us"] if who == "us" else p["ov_them"]
+            if ov is not None:
+                _text(d, (tx, cy + 2), f"{tier(ov)}  {_ordinal(ov)}", f_grade, _pole(ov), anchor=anchor)
+            if who == "us" and p["lean"] is not None:
+                _text(d, (tx, cy + 24), "LEAN ON", f_small, DIM, anchor=anchor)
+                _text(d, (tx, cy + 42), f"{labels[p['lean']]} {p['ax_us'][p['lean']]}th", f_grade, GREEN, anchor=anchor)
+            if who == "them" and p["attack"] is not None:
+                _text(d, (tx, cy + 24), "ATTACK", f_small, RED, anchor=anchor)
+                _text(d, (tx, cy + 42), f"{labels[p['attack']]} {p['ax_them'][p['attack']]}th", f_grade, RED, anchor=anchor)
+        if p["ov_us"] is not None and p["ov_them"] is not None:
+            diff = p["ov_us"] - p["ov_them"]
+            _text(d, (W / 2, cy - 10), "EDGE", f_small, DIM, anchor="mm")
+            if diff == 0:
+                _text(d, (W / 2, cy + 14), "EVEN", _font("black", 22), DIM, anchor="mm")
+            else:
+                _text(d, (W / 2, cy + 14), f"{'YOU' if diff > 0 else 'THEM'} +{abs(diff)}", _font("black", 22),
+                      BLUE_TEXT if diff > 0 else THEM, anchor="mm")
+        if p["attack"] is not None:
+            tip = clubmod.ATTACK[clubmod.AXES[p["attack"]][1]]
+            _text(d, (W / 2, y + row_h - 34), tip, _font("medium", 14), MUTED, anchor="mm")
+        y += row_h
+
+    fy = H - 56
+    d.line([PAD, fy - 20, W - PAD, fy - 20], fill=LINE)
+    _text(d, (PAD, fy), "chelscout.net", _font("bold", 17), BLUE_TEXT)
+    _text(d, (W - PAD, fy), "SCOUT SMARTER. CHIRP RESPONSIBLY.", _font("bold", 17), DIM, anchor="ra")
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     return buf.getvalue()

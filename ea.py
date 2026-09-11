@@ -786,8 +786,10 @@ def _club_detail_sync(club_id: str, platform: str) -> dict:
 
     def stats():
         try:
+            # clubIds only: with a duplicate clubId param alongside it EA
+            # answered HTTP 500 on every call in production.
             data = _club_get("clubs/stats",
-                             f"{BASE}/clubs/stats?platform={platform}&clubIds={cid}&clubId={cid}")
+                             f"{BASE}/clubs/stats?platform={platform}&clubIds={cid}")
             recs = _as_records(data)
             return recs[0] if recs else None
         except Exception as e:
@@ -799,7 +801,14 @@ def _club_detail_sync(club_id: str, platform: str) -> dict:
             data = _club_get("clubs/matches",
                              f"{BASE}/clubs/matches?platform={platform}&clubIds={cid}"
                              f"&matchType=club_private&maxResultCount=10")
-            return _as_records(data)
+            recs = _as_records(data)
+            # One match's per-club entry, once -- form() parses these and
+            # the field names are the part that changes between releases.
+            if recs and isinstance(recs[0].get("clubs"), dict):
+                entry = next(iter(recs[0]["clubs"].values()), None)
+                if isinstance(entry, dict):
+                    _log_shape("clubs/matches[0].clubs[x]", entry)
+            return recs
         except Exception as e:
             print(f"[ea] clubs/matches failed for {club_id}: {type(e).__name__}: {e}")
             return []

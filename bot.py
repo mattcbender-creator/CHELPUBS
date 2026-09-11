@@ -935,6 +935,69 @@ async def clubscout(interaction: discord.Interaction, club: str,
             await interaction.followup.send(f"The **{voice.name}** clip didn't come back: `{err}`"[:2000])
 
 
+# ----------------------------------------------------------------- matchup
+MATCHUP_READ_PROMPT = """You write the game plan at the top of a 5v5 matchup card:
+OUR club against THEIR club. The card shows both clubs' shapes, the edge on
+every skill, and five pairings (our man vs theirs) with the skill to attack
+on each of their guys. Two or three sentences, 40-60 words, no markdown.
+Say where the game is won and which of their players to go after, by name.
+Use only the card's grade words (elite / stud / solid / mid / weak / bad /
+shitter) and never invent a stat. Blunt, readable, not a bit."""
+
+
+async def _load_club(name: str) -> tuple[dict | None, str | None]:
+    """(summary, error). Search + roster/stats/matches for one club."""
+    try:
+        clubs = await ea.search_clubs(name, limit=3)
+    except ea.EAUnavailable as e:
+        print(f"[matchup] EA unavailable for {name!r}: {e}")
+        return None, "EA's API isn't answering right now -- that's on EA's end, try again in a bit."
+    if not clubs:
+        return None, f"EA has no club matching `{name}`. Start typing and pick it off the list."
+    c = clubs[0]
+    try:
+        detail = await ea.club_detail(c["clubId"], c["_platform"])
+    except Exception as e:
+        print(f"[matchup] detail failed for {c.get('name')!r}: {type(e).__name__}: {e}")
+        return None, f"Found **{c.get('name')}** but EA wouldn't hand over its roster (`{type(e).__name__}`)."
+    s = clubmod.summarize(c, detail)
+    if not s["skaters"]:
+        return None, f"**{s['name']}** has nobody with games played this season, so there's nothing to match up."
+    return s, None
+
+
+@tree.command(name="matchup", description="5v5 matchup: your club vs theirs -- team shapes overlaid, who to attack")
+@app_commands.describe(you="Your club, as spelled in-game", them="The club you're playing")
+@app_commands.autocomplete(you=club_autocomplete, them=club_autocomplete)
+async def matchup(interaction: discord.Interaction, you: str, them: str):
+    await interaction.response.defer()
+    (a, err_a), (b, err_b) = await asyncio.gather(_load_club(you), _load_club(them))
+    if not a or not b:
+        await interaction.followup.send(err_a or err_b)
+        return
+    pairs = clubmod.pairings(clubmod.lineup(a), clubmod.lineup(b))
+    if not pairs:
+        await interaction.followup.send("Neither club has five skaters with games played, so there's no lineup to pair.")
+        return
+    block = clubmod.format_matchup(a, b, pairs)
+    read = None
+    try:
+        resp = await call_llm(messages=[{"role": "system", "content": MATCHUP_READ_PROMPT},
+                                        {"role": "user", "content": block}],
+                              max_tokens=180, temperature=0.6)
+        read = (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        print(f"[matchup] read failed: {type(e).__name__}: {e}")
+    try:
+        png = await asyncio.to_thread(card.render_matchup, a, b, pairs, read)
+    except Exception as e:
+        await interaction.followup.send(f"Card render shit the bed: `{type(e).__name__}: {e}`")
+        return
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{a['name']}-vs-{b['name']}").strip("_")
+    await interaction.followup.send(file=discord.File(io.BytesIO(png), filename=f"{CLIP_BRAND}-matchup-{safe}.png"))
+
+
+# ------------------------------------------------------------ pool rebuild
 # The percentile pool rebuilds itself here, on the bot, because this is the
 # one machine EA reliably answers. Weekly, plus at boot if the pool on the
 # volume is older than that (a fresh volume starts from the repo's pool.json,
@@ -1052,6 +1115,8 @@ HELP = """**ChelScout Pubs**
 **Scout a player**
 `/pubscout <gamertag>` -- the stat card and a written read.
 `/clubscout <club name>` -- a club's record, roster shape, last 10 and roster.
+`/matchup <your club> <their club>` -- shapes overlaid, edge per skill, and
+your five against theirs with the skill to attack on each of their guys.
 Start typing and it suggests real EA gamertags; pick one off the list and you
 can't typo it. It has to be the EA gamertag as spelled in-game, not a Discord
 name -- and it's case-sensitive on EA's end, so the suggestions are the safe
