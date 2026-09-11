@@ -275,10 +275,20 @@ def clean_name(q: str) -> str:
     return q.strip()
 
 
+_SLASHY = [(re.compile(r"\bplus\s*/\s*minus\b", re.I), "plus minus"),
+           (re.compile(r"\+\s*/\s*-"), "plus minus"),
+           (re.compile(r"\bP\s*/\s*GP\b"), "points per game"),
+           (re.compile(r"\bSV\s*%"), "save percentage"),
+           (re.compile(r"\bGAA\b"), "goals against average"),
+           (re.compile(r"\bGP\b"), "games played")]
+
+
 def speakable(text: str) -> str:
-    """Records for a voice: '50-4-1' -> '50, 4 and 1', '50-4' -> '50 and 4'.
-    Spoken, those are what a broadcaster says; dashed, a TTS voice reads
-    them as a date."""
+    """Make the script safe for a voice: '50-4-1' -> '50, 4 and 1' (dashed,
+    a TTS voice reads it as a date); 'plus/minus' -> 'plus minus' (it was
+    saying "plus slash minus"); the stat abbreviations spelled out."""
+    for rx, rep_ in _SLASHY:
+        text = rx.sub(rep_, text)
     text = _REC3.sub(lambda m: f"{m[1]}, {m[2]} and {m[3]}", text)
     # Two-part: a record ("41-9") is spoken "41 and 9"; a score ("3-2") is
     # left alone -- "three and two" is wrong and TTS reads "3-2" fine.

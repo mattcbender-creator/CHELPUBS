@@ -727,6 +727,7 @@ def render_club(s: dict, read: str | None = None) -> bytes:
          + (len(read_lines) * 36 + 22 if read_lines else 12)
          + (146 if tiles else 0)
          + (2 * 118 + 2 * 44 + 40 if show_mid else 0)
+         + (30 + len(axes) * 50 + 14 if show_radar else 0)
          + 34 + 30 + len(rows) * 42 + 30
          + 74)
     img = Image.new("RGB", (W, H), BG)
@@ -813,6 +814,23 @@ def render_club(s: dict, read: str | None = None) -> bytes:
             _text(d, (fx, fy + 30 + 2 * 60 + 68), f"{'W' if streak_res == 'W' else 'L'}{n}", _font("black", 34),
                   GREEN if streak_res == "W" else RED)
         y += 2 * 118 + 2 * 44 + 40
+
+    # The same grades as bars, under the radar -- the radar is the glance,
+    # the bars are the precision, same as the player card.
+    if show_radar:
+        _text(d, (PAD, y), "longer and greener is better · 50th is a typical player", f_note, DIM)
+        y += 30
+        for lbl, key, p in axes:
+            h = 16
+            x0, x1 = PAD + 230, W - PAD - 168
+            _text(d, (PAD, y + 2), lbl, _font("bold", 20), TEXT)
+            d.rounded_rectangle([x0, y + 6, x1, y + 6 + h], radius=h // 2, fill=(30, 34, 43))
+            wbar = max((x1 - x0) * p / 100, h)
+            d.rounded_rectangle([x0, y + 6, x0 + wbar, y + 6 + h], radius=h // 2, fill=_pole(p))
+            _text(d, (W - PAD, y - 2), tier(p), _font("bold", 19), TEXT, anchor="ra")
+            _text(d, (W - PAD, y + 21), _ordinal(p), f_note, DIM, anchor="ra")
+            y += 50
+        y += 14
 
     _text(d, (PAD, y), "ROSTER  ·  GRADE IS HIS POSITION'S PERCENTILE", f_statlbl, DIM)
     y += 34
