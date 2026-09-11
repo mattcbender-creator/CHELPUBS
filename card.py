@@ -933,10 +933,10 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
 
     by_slot = {p["slot"]: p for p in pairs}
     order = [s for s in POS_ORDER if s in by_slot]
-    R = 150
+    R = 118
     PAIR_H = 78
     H = (150 + 70 + (34 if note else 0)          # header
-         + 46 + 2 * R + 118                       # radar + axis labels
+         + 46 + 2 * R + 132                       # two radars side by side
          + 56                                     # goalie line
          + 44 + 40 + len(order) * PAIR_H          # gap ladder
          + 74)
@@ -968,15 +968,37 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
         _text(d, (PAD, y + 4), note, f_note, DIM)
         y += 34
 
-    # ---- main radar: play-style overlay, five-man mean percentile per axis
-    _text(d, (PAD, y), "TEAM PLAY STYLE  ·  FIVE-MAN MEAN PERCENTILE PER SKILL", f_h, DIM)
+    # ---- two radars, side by side: team play style, and the five
+    # position matchups (each axis = our man at that slot vs the man he
+    # lines up against, both as overall percentile).
+    _text(d, (PAD, y), "TEAM PLAY STYLE  ·  FIVE-MAN MEAN", f_h, DIM)
+    _text(d, (W / 2 + 40, y), "BY POSITION  ·  YOUR MAN vs HIS MAN", f_h, DIM)
     ly0 = y + 24
     d.rounded_rectangle([PAD, ly0 + 2, PAD + 22, ly0 + 14], radius=3, fill=BLUE_TEXT)
     _text(d, (PAD + 30, ly0 + 8), "YOU", _font("bold", 14), MUTED, anchor="lm")
     d.rounded_rectangle([PAD + 90, ly0 + 2, PAD + 112, ly0 + 14], radius=3, fill=THEM)
     _text(d, (PAD + 120, ly0 + 8), "THEM", _font("bold", 14), MUTED, anchor="lm")
     y += 46
-    cx, cy = W / 2, y + 96 + R
+    cy = y + 86 + R
+    f_axlbl = _font("bold", 14)
+
+    def draw_radar(cx, axes_labels, vals_us, vals_them, label_dist=30, val_dist=26):
+        _radar_multi(img, cx, cy, R, [(vals_them, THEM, THEM_FILL), (vals_us, BLUE_TEXT, US_FILL)])
+        dd = ImageDraw.Draw(img)
+        n = len(axes_labels)
+        for i, lbl in enumerate(axes_labels):
+            ang = -math.pi / 2 + 2 * math.pi * i / n
+            dx, dy = math.cos(ang), math.sin(ang)
+            x, yv = cx + dx * (R + label_dist), cy + dy * (R + val_dist)
+            _text(dd, (x, yv - 10), lbl, f_axlbl, DIM, anchor="ma")
+            vu, vt = vals_us[i], vals_them[i]
+            w_us = dd.textlength(str(vu), font=f_val)
+            w_mid = dd.textlength(" · ", font=f_val)
+            total = w_us + w_mid + dd.textlength(str(vt), font=f_val)
+            x0 = x - total / 2
+            _text(dd, (x0, yv + 9), str(vu), f_val, BLUE_TEXT)
+            _text(dd, (x0 + w_us, yv + 9), " · ", f_val, DIM)
+            _text(dd, (x0 + w_us + w_mid, yv + 9), str(vt), f_val, THEM)
 
     def axis_mean(side):
         out = []
@@ -985,24 +1007,12 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
             out.append(round(sum(vs) / len(vs)) if vs else 0)
         return out
 
-    vals_us, vals_them = axis_mean("ax_us"), axis_mean("ax_them")
-    _radar_multi(img, cx, cy, R, [(vals_them, THEM, THEM_FILL), (vals_us, BLUE_TEXT, US_FILL)])
+    draw_radar(PAD + 92 + R, [lbl for lbl, _ in clubmod.AXES], axis_mean("ax_us"), axis_mean("ax_them"))
+    draw_radar(W - PAD - 92 - R, order,
+               [by_slot[s2]["ov_us"] or 0 for s2 in order],
+               [by_slot[s2]["ov_them"] or 0 for s2 in order])
     d = ImageDraw.Draw(img)
-    n = len(clubmod.AXES)
-    for i, (lbl, _) in enumerate(clubmod.AXES):
-        ang = -math.pi / 2 + 2 * math.pi * i / n
-        dx, dy = math.cos(ang), math.sin(ang)
-        x, yv = cx + dx * (R + 34), cy + dy * (R + 30)
-        anchor = "ma"
-        _text(d, (x, yv - 10), lbl, f_ax, DIM, anchor=anchor)
-        w_us = d.textlength(str(vals_us[i]), font=f_val)
-        w_mid = d.textlength(" · ", font=f_val)
-        total = w_us + w_mid + d.textlength(str(vals_them[i]), font=f_val)
-        x0 = x - total / 2
-        _text(d, (x0, yv + 12), str(vals_us[i]), f_val, BLUE_TEXT)
-        _text(d, (x0 + w_us, yv + 12), " · ", f_val, DIM)
-        _text(d, (x0 + w_us + w_mid, yv + 12), str(vals_them[i]), f_val, THEM)
-    y = cy + R + 88
+    y = cy + R + 96
 
     # ---- goalies, numbers only
     def gline(s):
@@ -1021,8 +1031,7 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
     # The bar grows from the centre line toward whoever holds the edge; its
     # length is the gap. Five bars total -- readable in seconds. The per-axis
     # detail lives on the interactive board, not here.
-    _text(d, (PAD, y), "5V5  ·  OVERALL PERCENTILE GAP AT EACH POSITION  ·  "
-                       "bar grows toward the better man", f_h, DIM)
+    _text(d, (PAD, y), "5V5  ·  OVERALL PERCENTILE GAP AT EACH POSITION  ·  bar grows toward the better man", f_h, DIM)
     y += 30
     gaps = [(s2, by_slot[s2]) for s2 in order
             if by_slot[s2]["ov_us"] is not None and by_slot[s2]["ov_them"] is not None]
@@ -1046,9 +1055,14 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
         d.rounded_rectangle([PAD, y, W - PAD, y + PAIR_H - 10], radius=12, fill=(18, 21, 27))
         cyr = y + (PAIR_H - 10) / 2
         _text(d, (PAD + 20, y + 10), f"{s2} v {p['vs']}", f_small, DIM)
-        _text(d, (PAD + 20, y + 32), p["us"]["name"], f_nm, BLUE_TEXT)
+        def fit(nm, maxw):
+            while d.textlength(nm, font=f_nm) > maxw and len(nm) > 4:
+                nm = nm[:-2].rstrip() + "\u2026"
+            return nm
+        name_w = (cxm - half_w) - (PAD + 20) - 52
+        _text(d, (PAD + 20, y + 32), fit(p["us"]["name"], name_w), f_nm, BLUE_TEXT)
         _text(d, (W - PAD - 20, y + 10), "" , f_small, DIM, anchor="ra")
-        _text(d, (W - PAD - 20, y + 32), p["them"]["name"], f_nm, THEM, anchor="ra")
+        _text(d, (W - PAD - 20, y + 32), fit(p["them"]["name"], name_w), f_nm, THEM, anchor="ra")
         # centre track
         tx0, tx1 = cxm - half_w, cxm + half_w
         ty = cyr + 10
@@ -1066,13 +1080,6 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
             _text(d, (cxm, y + 8), lab, f_gap, col, anchor="ma")
             _text(d, (tx0 - 14, ty - 10), str(vu), f_val, BLUE_TEXT, anchor="ra")
             _text(d, (tx1 + 14, ty - 10), str(vt), f_val, THEM)
-        # his lowest graded skill -- but only when it is actually LOW.
-        # A man whose worst axis is the 90th percentile has no weakness
-        # worth printing, and calling one a "low" reads as a mistake.
-        if p["attack"] is not None and p["ax_them"][p["attack"]] < 50:
-            _text(d, (W - PAD - 20, y + PAIR_H - 26),
-                  f"his low: {clubmod.AXES[p['attack']][0]} {_ordinal(p['ax_them'][p['attack']])}",
-                  f_small, RED, anchor="ra")
         y += PAIR_H
 
     fy = H - 56
