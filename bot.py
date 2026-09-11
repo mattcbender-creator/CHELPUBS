@@ -789,6 +789,11 @@ right under you, so don't read numbers back; say what they MEAN.
 
 40-55 words, no markdown, no bullets. Blunt, readable, not a bit.
 
+EASHL is 6v6 club hockey with NO lines and NO line changes: every player
+is one human at one position for the whole game. Never say "top line",
+"second line", "depth", "line changes", "roll four lines", "bench" or any
+NHL-lineup language. It's the same five skaters and goalie every shift.
+
 YOU MUST NOT CONTRADICT THE ROSTER SHAPE GRADES -- they're printed on the
 card. Use their exact words (elite / stud / solid / mid / weak / bender /
 shitter) and no other rating vocabulary. Never invent a stat, never do
@@ -823,6 +828,8 @@ async def _club_voice_file(voice, block: str) -> tuple[discord.File | None, str 
     team, not a player, since the scout prompts were written for one guy."""
     team_note = ("This report is about a CLUB (a whole team and its roster), not one player. "
                  "Talk about the team; name a player or two from the roster if it helps. "
+                 "EASHL has no lines and no line changes -- one human per position all game -- "
+                 "so never say 'top line', 'depth' or 'line changes'. "
                  "Say a record the way a broadcaster does -- \"fifty, four and one\" -- never "
                  "with dashes, and never as a date.")
     try:
@@ -963,6 +970,10 @@ MATCHUP_READ_PROMPT = """You write the game plan at the top of a 5v5 matchup car
 OUR club against THEIR club. The card shows both clubs' shapes, the edge on
 every skill, and five pairings (our man vs theirs) with the skill to attack
 on each of their guys. Two or three sentences, 40-60 words, no markdown.
+EASHL is 6v6 club hockey with NO lines and NO line changes: every player
+is one human at one position for the whole game. Never say "top line",
+"second line", "depth", "line changes", "roll four lines", "bench" or any
+NHL-lineup language. It's the same five skaters and goalie every shift.
 Say where the game is won and which of their players to go after, by name.
 Use only the card's grade words (elite / stud / solid / mid / weak / bad /
 shitter) and never invent a stat. Blunt, readable, not a bit."""
