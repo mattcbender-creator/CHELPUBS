@@ -909,8 +909,10 @@ def _radar_multi(img, cx, cy, r, series, labels=None, f_lbl=None, ring_axis=None
 
 
 THEM = (196, 132, 31)             # the other club: amber outline, never red (red means "attack here")
-THEM_FILL = (196, 132, 31, 80)
-US_FILL = (0, 105, 250, 95)
+# Semi-transparent fills: the two shapes overlap almost everywhere, so
+# both must stay readable through each other; the strokes carry the edges.
+THEM_FILL = (196, 132, 31, 52)
+US_FILL = (0, 105, 250, 55)
 
 
 # Around the pentagon the way the ice reads: C at the top, wings either
