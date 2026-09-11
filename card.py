@@ -935,7 +935,7 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
     by_slot = {p["slot"]: p for p in pairs}
     order = [s for s in POS_ORDER if s in by_slot]
     R = 118
-    PAIR_H = 78
+    PAIR_H = 92
     H = (150 + 70 + (34 if note else 0)          # header
          + 46 + 2 * R + 132                       # two radars side by side
          + 56                                     # goalie line
@@ -1103,6 +1103,14 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
             return nm
         name_w = (cxm - half_w) - (PAD + 20) - 52
         _text(d, (PAD + 20, y + 32), fit(p["us"]["name"], name_w), f_nm, BLUE_TEXT)
+        # tiny sample line: the games behind each man's number
+        f_tiny = _font("medium", 12)
+        def statline(r):
+            gp = r.get("gp", 0) or 0
+            pts = r.get("pts", 0) or 0
+            return f"{pts / gp:.2f} p/gp · {gp:.0f} gp" if gp else "no games"
+        _text(d, (PAD + 20, y + 60), statline(p["us"]), f_tiny, DIM)
+        _text(d, (W - PAD - 20, y + 60), statline(p["them"]), f_tiny, DIM, anchor="ra")
         _text(d, (W - PAD - 20, y + 10), "" , f_small, DIM, anchor="ra")
         _text(d, (W - PAD - 20, y + 32), fit(p["them"]["name"], name_w), f_nm, THEM, anchor="ra")
         # centre track
