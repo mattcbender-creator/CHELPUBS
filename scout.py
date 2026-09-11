@@ -172,6 +172,52 @@ def render(cid_a: str, cid_b: str, title: str) -> str:
     return html.replace("__TITLE__", title).replace("__DATA__", json.dumps(pack, separators=(",", ":")))
 
 
+def _form_line(nm: str, rows: dict, min_gp: int = 2) -> str | None:
+    """One data-only line of recent harvested form for a player, or None
+    when the sample is under the floor. Private games preferred."""
+    rs = rows.get(nm, [])
+    priv = [r for r in rs if r["mt"] == "private"]
+    use, src = (priv, "private") if len(priv) >= min_gp else (rs, "recent")
+    if len(use) < min_gp:
+        return None
+    a = _agg(use)
+    if a.get("gl_gp"):
+        return (f"{nm}: {a['gl_gp']} {src} games in net -- {a['gl_svpct']:.3f} save% "
+                f"({a['gl_sv']} saves on {a['gl_sh']} shots, {a['gl_ga']} GA)")
+    if "gpg" not in a:
+        return None
+    bits = [f"{a['gpg']}G {a['apg']}A per game", f"{a['passpct']}% pass",
+            f"{a['poss']}s possession/gm"]
+    if a["fow"] + a["fol"] >= 20:
+        bits.append(f"{100 * a['fow'] / (a['fow'] + a['fol']):.0f}% on {a['fow'] + a['fol']} draws")
+    return f"{nm}: {a['gp']} {src} games -- " + ", ".join(bits)
+
+
+def player_form_block(nm: str) -> str | None:
+    """Harvested-match form for one player, for the /pubscout block."""
+    rows = _rows(harvest.load_store())
+    line = _form_line(nm, rows)
+    if not line:
+        return None
+    return ("\n\nRECENT HARVESTED GAMES (per-match box scores from EA's feed; "
+            "small sample, state the game count with any number from here):\n  " + line)
+
+
+def club_form_block(cid: str) -> str | None:
+    """Per-player harvested form for everyone who has dressed for this club
+    in stored matches -- which includes guests, the players EA's roster
+    endpoint never shows. That's the whole point."""
+    rows = _rows(harvest.load_store())
+    club_rows = {nm: [r for r in rs if r["club"] == str(cid)] for nm, rs in rows.items()}
+    club_rows = {nm: rs for nm, rs in club_rows.items() if rs}
+    lines = [l for nm in sorted(club_rows) if (l := _form_line(nm, club_rows))]
+    if not lines:
+        return None
+    return ("\n\nRECENT MATCH FORM (per player, from this club's harvested EA match feed; "
+            "these are small samples -- give the game count with any number used):\n  "
+            + "\n  ".join(lines))
+
+
 if __name__ == "__main__":
     out = render("12521", "22423", "Wildman vs Entourage")
     with open("board_test.html", "w", encoding="utf-8") as f:

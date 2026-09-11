@@ -683,6 +683,9 @@ async def pubscout(interaction: discord.Interaction, gamertag: str,
     block = ea.format_stats(m)
     block += (f"\n\nPERCENTILE RANKS vs other {primary} with 50+ games -- these are what "
               f"the card shows, do not contradict them:\n" + "\n".join(pcts))
+    form = await asyncio.to_thread(scout.player_form_block, str(m.get("name")))
+    if form:
+        block += form
     if standout:
         block += (f"\n\nSTANDOUT TRAIT to focus on: {standout['trait']} -- "
                   f"{standout['grade']} ({standout['detail']})")
@@ -920,11 +923,17 @@ async def clubscout(interaction: discord.Interaction, club: str,
                                         f"(`{type(e).__name__}`). Try again in a bit.")
         return
     s = clubmod.summarize(c, detail)
+    # bank what we just fetched -- history accumulates from normal use
+    asyncio.create_task(asyncio.to_thread(
+        harvest.absorb, str(c["clubId"]), detail.get("matches"), detail.get("members")))
     if not s["skaters"] and not s["goalies"]:
         await interaction.followup.send(f"**{s['name']}** exists but EA lists nobody on it with games played "
                                         "this season.")
         return
     block = clubmod.format_block(s)
+    form = await asyncio.to_thread(scout.club_form_block, str(c["clubId"]))
+    if form:
+        block += form
 
     # The clip is the slow part (a model call, then 20-40s of TTS), so it
     # starts NOW, alongside the card's own read and render, instead of after
@@ -998,6 +1007,8 @@ async def _load_club(name: str) -> tuple[dict | None, str | None]:
     except Exception as e:
         print(f"[matchup] detail failed for {c.get('name')!r}: {type(e).__name__}: {e}")
         return None, f"Found **{c.get('name')}** but EA wouldn't hand over its roster (`{type(e).__name__}`)."
+    asyncio.create_task(asyncio.to_thread(
+        harvest.absorb, str(c["clubId"]), detail.get("matches"), detail.get("members")))
     s = clubmod.summarize(c, detail)
     if not s["skaters"]:
         return None, f"**{s['name']}** has nobody with games played this season, so there's nothing to match up."

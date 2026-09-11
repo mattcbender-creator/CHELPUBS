@@ -13,10 +13,15 @@ production. One request at a time, a pause between, stop dead on a 403.
 
 import json
 import os
+import threading
 import time
 from urllib.parse import quote
 
 import ea
+
+# One process, many callers (the 4-hourly loop, plus every /clubscout and
+# /matchup absorbing what it already fetched) -- serialize the read/write.
+_LOCK = threading.Lock()
 
 # Volume first (survives deploys), repo file as the seed/fallback --
 # the same pattern pool.json uses.
@@ -53,6 +58,32 @@ def _get(url: str):
         if "403" in str(e):
             raise ea.RateLimited(str(e)) from e
         raise
+
+
+def absorb(club_id: str, matches: list | None, members: list | None) -> int:
+    """Bank data another command already fetched -- no network. Every
+    /clubscout and /matchup call feeds the store this way, so history
+    accumulates from normal use, not just the scheduled poll."""
+    if not matches and not members:
+        return 0
+    added = 0
+    with _LOCK:
+        store = load_store()
+        for m in matches or []:
+            mid = str(m.get("matchId"))
+            if mid and mid not in store["matches"]:
+                m = dict(m)
+                m["_matchType"] = "club_private"
+                m["_club"] = str(club_id)
+                store["matches"][mid] = m
+                added += 1
+        if members:
+            store["members"][str(club_id)] = {"at": time.time(), "members": members}
+        if added or members:
+            save_store(store)
+    if added:
+        print(f"[harvest] absorbed {added} new matches from a scout of club {club_id}", flush=True)
+    return added
 
 
 def harvest(club_ids: list[str], platform: str = "common-gen5") -> dict:
@@ -97,7 +128,14 @@ def harvest(club_ids: list[str], platform: str = "common-gen5") -> dict:
             exact = next((h for h in hits if str(h.get("name", "")).lower() == nm.lower()), None)
             store["careers"][nm] = exact or (hits[0] if hits else None)
     finally:
-        save_store(store)
+        # Merge-write under the lock: an absorb() that landed while this
+        # pass was on the network must not be clobbered by our stale copy.
+        with _LOCK:
+            fresh = load_store()
+            fresh["matches"].update(store["matches"])
+            fresh["members"].update(store["members"])
+            fresh["careers"].update(store["careers"])
+            save_store(fresh)
 
     report = {"clubs": len(club_ids), "new_matches": new_matches,
               "total_matches": len(store["matches"]), "careers": len(store["careers"])}
