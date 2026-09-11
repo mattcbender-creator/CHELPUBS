@@ -940,7 +940,7 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
          + 46 + 2 * R + 132                       # two radars side by side
          + 56                                     # goalie line
          + 44 + 40 + len(order) * PAIR_H          # gap ladder
-         + (46 + 236 + 40 if fwds and (fwds.get("us") or fwds.get("them")) else 0)
+         + (34 + 232 + 26 if fwds and (fwds.get("us") or fwds.get("them")) else 0)
          + 74)
     img = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(img)
@@ -969,6 +969,46 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
     if note:
         _text(d, (PAD, y + 4), note, f_note, DIM)
         y += 34
+
+    # ---- forwards: twin PUCK TIME strips under the names. Rows sorted by
+    # possession -- the order IS "who holds the puck most". One shared bar
+    # scale across both panels so the eye compares across teams. Style is
+    # the player card's shooter/playmaker slider, already-learned idiom.
+    if fwds and (fwds.get("us") or fwds.get("them")):
+        f_ph = _font("bold", 14); f_pn = _font("bold", 19)
+        f_hero = _font("black", 26); f_sty = _font("medium", 13); f_end = _font("bold", 11)
+        all_poss = [f["poss"] for f in fwds.get("us", []) + fwds.get("them", [])]
+        top = max(all_poss) if all_poss else 1
+        _text(d, (PAD, y), "FORWARDS  ·  PUCK TIME  ·  FROM BANKED MATCHES", f_h, DIM)
+        y += 34
+        pw = (W - 2 * PAD - 20) / 2
+        for side, x0, col in (("us", PAD, BLUE_TEXT), ("them", PAD + pw + 20, THEM)):
+            rows = sorted(fwds.get(side, []), key=lambda f: -f["poss"])
+            d.rounded_rectangle([x0, y, x0 + pw, y + 232], radius=12, fill=(18, 21, 27))
+            _text(d, (x0 + 18, y + 12), "PUCK TIME · S/GM", f_ph, DIM)
+            ix0, ix1 = x0 + 18, x0 + pw - 18
+            for i, f in enumerate(rows[:3]):
+                ry = y + 40 + i * 62
+                _text(d, (ix0, ry), f["name"], f_pn, col)
+                _text(d, (ix1, ry - 4), f"{f['poss']}s", f_hero, TEXT, anchor="ra")
+                # possession bar, shared scale
+                d.rounded_rectangle([ix0, ry + 28, ix1, ry + 34], radius=3, fill=(30, 34, 43))
+                if f["poss"] > 0:
+                    d.rounded_rectangle([ix0, ry + 28, ix0 + (ix1 - ix0) * f["poss"] / top, ry + 34],
+                                        radius=3, fill=col)
+                # style: goal-share text left, mini spectrum right
+                _text(d, (ix0, ry + 40), f"{f['gs']}% OF PTS = GOALS · {f['gp']} GM", f_sty, MUTED)
+                sx1, sx0 = ix1, ix1 - 110
+                sy = ry + 48
+                d.line([sx0, sy, sx1, sy], fill=(30, 34, 43), width=4)
+                d.line([(sx0 + sx1) / 2, sy - 5, (sx0 + sx1) / 2, sy + 5], fill=(70, 76, 92), width=2)
+                dotx = sx0 + (sx1 - sx0) * (100 - f["gs"]) / 100
+                d.ellipse([dotx - 5, sy - 5, dotx + 5, sy + 5], fill=col, outline=(*BG, 255), width=2)
+                if i == len(rows[:3]) - 1:
+                    _text(d, (sx0, sy + 9), "SHO", f_end, DIM)
+                    _text(d, (sx1, sy + 9), "PLY", f_end, DIM, anchor="ra")
+        y += 232 + 26
+
 
     # ---- two radars, side by side: team play style, and the five
     # position matchups (each axis = our man at that slot vs the man he
@@ -1028,49 +1068,6 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
     _text(d, (W - PAD, y), gline(b), f_note, THEM, anchor="ra")
     _text(d, (W / 2, y), "IN NET", f_h, DIM, anchor="ma")
     y += 56
-
-    # ---- forwards: who holds the puck, and what he does with it.
-    # y = seconds of possession per game (banked matches); x = career goal
-    # share, shooter left, playmaker right. A dot per forward, team colour.
-    if fwds and (fwds.get("us") or fwds.get("them")):
-        pts = ([dict(f, team="us") for f in fwds.get("us", [])]
-               + [dict(f, team="them") for f in fwds.get("them", [])])
-        _text(d, (PAD, y), "FORWARDS  ·  PUCK TIME vs STYLE  ·  from banked matches", f_h, DIM)
-        y += 46
-        px0, px1 = PAD + 76, W - PAD - 40
-        py1 = y + 190
-        top = max(f["poss"] for f in pts) * 1.15 or 1
-        # frame + midline
-        d.line([px0, y, px0, py1], fill=LINE, width=2)
-        d.line([px0, py1, px1, py1], fill=LINE, width=2)
-        xm = (px0 + px1) / 2
-        d.line([xm, y, xm, py1], fill=(30, 34, 43), width=2)
-        f_axl = _font("bold", 14); f_dot = _font("bold", 16)
-        _text(d, (px0, py1 + 12), "SHOOTER", f_axl, MUTED)
-        _text(d, (px1, py1 + 12), "PLAYMAKER", f_axl, MUTED, anchor="ra")
-        _text(d, (xm, py1 + 12), "50/50", f_axl, DIM, anchor="ma")
-        _text(d, (px0 - 12, y - 4), f"{top:.0f}s", f_axl, DIM, anchor="ra")
-        _text(d, (px0 - 12, py1 - 14), "0s", f_axl, DIM, anchor="ra")
-        _text(d, (px0 - 12, (y + py1) / 2), "PUCK\nTIME\n/GM", f_axl, DIM, anchor="rm")
-        placed = []
-        for f in pts:
-            fx = px0 + (px1 - px0) * (100 - f["gs"]) / 100
-            fy = py1 - (py1 - y) * f["poss"] / top
-            placed.append({"fx": fx, "fy": fy, "ly": fy,
-                           "col": BLUE_TEXT if f["team"] == "us" else THEM,
-                           "lbl": f"{f['name']}  {f['poss']}s"})
-        # labels: nudge apart vertically so close dots never overprint
-        placed.sort(key=lambda q: q["fy"])
-        for i in range(1, len(placed)):
-            if placed[i]["ly"] - placed[i - 1]["ly"] < 22:
-                placed[i]["ly"] = placed[i - 1]["ly"] + 22
-        for q in placed:
-            d.ellipse([q["fx"] - 8, q["fy"] - 8, q["fx"] + 8, q["fy"] + 8],
-                      fill=q["col"], outline=(*BG, 255), width=2)
-            anchor2 = "lm" if q["fx"] < xm else "rm"
-            lx = q["fx"] + 14 if q["fx"] < xm else q["fx"] - 14
-            _text(d, (lx, q["ly"]), q["lbl"], f_dot, q["col"], anchor=anchor2)
-        y = py1 + 40
 
     # ---- the gap ladder: one row per pairing, one diverging bar per row.
     # The bar grows from the centre line toward whoever holds the edge; its
