@@ -934,11 +934,11 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
     by_slot = {p["slot"]: p for p in pairs}
     order = [s for s in POS_ORDER if s in by_slot]
     R = 150
-    PAIR_H = 66 + len(clubmod.AXES) * 27 + 22
+    PAIR_H = 78
     H = (150 + 70 + (34 if note else 0)          # header
          + 46 + 2 * R + 118                       # radar + axis labels
          + 56                                     # goalie line
-         + 44 + len(order) * PAIR_H               # pairing blocks
+         + 44 + 40 + len(order) * PAIR_H          # gap ladder
          + 74)
     img = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(img)
@@ -1017,50 +1017,62 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
     _text(d, (W / 2, y), "IN NET", f_h, DIM, anchor="ma")
     y += 56
 
-    # ---- five pairing blocks: both men's full axis lines as paired bars
-    _text(d, (PAD, y), "5V5  ·  YOUR MAN vs THE MAN HE LINES UP AGAINST  ·  "
-                       "center tick = a typical player  ·  red = his lowest skill", f_h, DIM)
-    y += 44
-    bar_x0, bar_x1 = PAD + 210, W - PAD - 120
-    bw = bar_x1 - bar_x0
-    for s in order:
-        p = by_slot[s]
-        d.rounded_rectangle([PAD, y, W - PAD, y + PAIR_H - 12], radius=12, fill=(18, 21, 27))
-        yy = y + 16
-        _text(d, (PAD + 22, yy), f"{s}  vs their {p['vs']}", _font("black", 15), DIM)
-        nm_us, nm_them = p["us"]["name"], p["them"]["name"]
-        _text(d, (PAD + 22, yy + 22), nm_us, f_nm, BLUE_TEXT)
-        _text(d, (W - PAD - 22, yy + 22), nm_them, f_nm, THEM, anchor="ra")
-        if p["ov_us"] is not None and p["ov_them"] is not None:
-            diff = p["ov_us"] - p["ov_them"]
+    # ---- the gap ladder: one row per pairing, one diverging bar per row.
+    # The bar grows from the centre line toward whoever holds the edge; its
+    # length is the gap. Five bars total -- readable in seconds. The per-axis
+    # detail lives on the interactive board, not here.
+    _text(d, (PAD, y), "5V5  ·  OVERALL PERCENTILE GAP AT EACH POSITION  ·  "
+                       "bar grows toward the better man", f_h, DIM)
+    y += 30
+    gaps = [(s2, by_slot[s2]) for s2 in order
+            if by_slot[s2]["ov_us"] is not None and by_slot[s2]["ov_them"] is not None]
+    if gaps:
+        top_slot, top = max(gaps, key=lambda t: abs(t[1]["ov_us"] - t[1]["ov_them"]))
+        tdiff = top["ov_us"] - top["ov_them"]
+        if abs(tdiff) >= 10:
+            side = "YOU" if tdiff > 0 else "THEM"
+            col = BLUE_TEXT if tdiff > 0 else THEM
+            _text(d, (PAD, y), f"Biggest gap: {top_slot} -- {top['us']['name']} {top['ov_us']} vs "
+                               f"{top['them']['name']} {top['ov_them']}  ({side} +{abs(tdiff)})", f_note, col)
+        else:
+            _text(d, (PAD, y), "No position gap over 10 points -- even lineups.", f_note, DIM)
+        y += 40
+    cxm = W / 2
+    half_w = 190          # bar span each side of centre; 30+ points = full
+    f_gap = _font("black", 20); f_small = _font("bold", 14)
+    for s2 in order:
+        p = by_slot[s2]
+        vu, vt = p["ov_us"], p["ov_them"]
+        d.rounded_rectangle([PAD, y, W - PAD, y + PAIR_H - 10], radius=12, fill=(18, 21, 27))
+        cyr = y + (PAIR_H - 10) / 2
+        _text(d, (PAD + 20, y + 10), f"{s2} v {p['vs']}", f_small, DIM)
+        _text(d, (PAD + 20, y + 32), p["us"]["name"], f_nm, BLUE_TEXT)
+        _text(d, (W - PAD - 20, y + 10), "" , f_small, DIM, anchor="ra")
+        _text(d, (W - PAD - 20, y + 32), p["them"]["name"], f_nm, THEM, anchor="ra")
+        # centre track
+        tx0, tx1 = cxm - half_w, cxm + half_w
+        ty = cyr + 10
+        d.line([tx0, ty, tx1, ty], fill=(30, 34, 43), width=6)
+        d.line([cxm, ty - 9, cxm, ty + 9], fill=(70, 76, 92), width=2)
+        if vu is not None and vt is not None:
+            diff = vu - vt
+            wpx = min(abs(diff), 30) / 30 * half_w
+            if diff > 0:
+                d.rounded_rectangle([cxm - wpx, ty - 5, cxm, ty + 5], radius=4, fill=BLUE)
+            elif diff < 0:
+                d.rounded_rectangle([cxm, ty - 5, cxm + wpx, ty + 5], radius=4, fill=THEM)
             lab = "EVEN" if diff == 0 else f"{'YOU' if diff > 0 else 'THEM'} +{abs(diff)}"
             col = DIM if diff == 0 else (BLUE_TEXT if diff > 0 else THEM)
-            _text(d, (W / 2, yy + 26), f"{p['ov_us']} vs {p['ov_them']}  ·  {lab}", f_edge, col, anchor="ma")
-        yy = y + 70
-        for i, (lbl, key) in enumerate(clubmod.AXES):
-            vu, vt = p["ax_us"][i], p["ax_them"][i]
-            _text(d, (PAD + 22, yy - 5), lbl, f_ax, MUTED)
-            # dumbbell: one shared 0-100 track, a dot per man, the distance
-            # between the dots IS the matchup on that skill
-            ty = yy + 4
-            d.line([bar_x0, ty, bar_x1, ty], fill=(30, 34, 43), width=4)
-            for tick in (25, 50, 75):
-                tx = bar_x0 + bw * tick / 100
-                th = 7 if tick == 50 else 4
-                d.line([tx, ty - th, tx, ty + th], fill=(70, 76, 92) if tick == 50 else (40, 45, 56), width=2)
-            if vu is not None and vt is not None:
-                xu, xt = bar_x0 + bw * vu / 100, bar_x0 + bw * vt / 100
-                d.line([xu, ty, xt, ty], fill=(96, 102, 116), width=4)
-            them_col = RED if p["attack"] == i else THEM
-            if vt is not None:
-                xt = bar_x0 + bw * vt / 100
-                d.ellipse([xt - 7, ty - 7, xt + 7, ty + 7], fill=them_col, outline=(*BG, 255), width=2)
-            if vu is not None:
-                xu = bar_x0 + bw * vu / 100
-                d.ellipse([xu - 7, ty - 7, xu + 7, ty + 7], fill=BLUE_TEXT, outline=(*BG, 255), width=2)
-            _text(d, (bar_x1 + 14, yy - 5), "--" if vu is None else str(vu), f_val, BLUE_TEXT)
-            _text(d, (bar_x1 + 64, yy - 5), "--" if vt is None else str(vt), f_val, them_col)
-            yy += 27
+            _text(d, (cxm, y + 8), lab, f_gap, col, anchor="ma")
+            _text(d, (tx0 - 14, ty - 10), str(vu), f_val, BLUE_TEXT, anchor="ra")
+            _text(d, (tx1 + 14, ty - 10), str(vt), f_val, THEM)
+        # his lowest graded skill -- but only when it is actually LOW.
+        # A man whose worst axis is the 90th percentile has no weakness
+        # worth printing, and calling one a "low" reads as a mistake.
+        if p["attack"] is not None and p["ax_them"][p["attack"]] < 50:
+            _text(d, (W - PAD - 20, y + PAIR_H - 26),
+                  f"his low: {clubmod.AXES[p['attack']][0]} {_ordinal(p['ax_them'][p['attack']])}",
+                  f_small, RED, anchor="ra")
         y += PAIR_H
 
     fy = H - 56
