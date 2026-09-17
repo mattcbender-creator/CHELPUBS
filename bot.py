@@ -236,8 +236,10 @@ async def find_scout_target(interaction: discord.Interaction,
             return None, "Couldn't look that Discord user up."
         return await _match_or_explain(person)
 
-    # Plain text: an EA gamertag, tolerating a leading @ people type by habit.
-    q = raw.lstrip("@").strip()
+    # Plain text: an EA gamertag, tolerating a leading @ people type by habit
+    # and the autocomplete's own label, which Discord mobile sends back in
+    # place of the value.
+    q = ea.strip_label(raw.lstrip("@").strip())
     try:
         m = await ea.search_player(q)
     except ea.EAUnavailable as e:
@@ -252,7 +254,7 @@ async def find_scout_target(interaction: discord.Interaction,
     if len(_norm(q)) < ea.MIN_QUERY:
         return None, (f"`{raw}` is too short to search -- EA needs at least "
                       f"{ea.MIN_QUERY} characters.")
-    return None, (f"EA has no player matching `{raw}`. It has to be the EA gamertag "
+    return None, (f"EA has no player matching `{q}`. It has to be the EA gamertag "
                   "as spelled in-game, not a Discord name.")
 
 async def gamertag_autocomplete(interaction: discord.Interaction, current: str):

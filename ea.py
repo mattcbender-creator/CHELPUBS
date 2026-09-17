@@ -341,6 +341,19 @@ def label(m: dict) -> str:
     return f"{m.get('name')} — {pos}, {gp:.0f} GP"
 
 
+# Discord on mobile sometimes hands back an autocomplete choice's DISPLAY
+# LABEL instead of its value, so a user who picked a real player off the
+# picker sent us "McC x 45 — G, 131 GP" and got told EA has no such player.
+# Anchored to the exact tail label() writes -- a bare em-dash split would
+# mangle a legitimate gamertag that happens to contain one.
+_LABEL_TAIL = re.compile(r"\s+[—–-]\s+(?:C|LW|RW|D|G|\?),\s*[\d,]+\s*GP\s*$")
+
+
+def strip_label(q: str) -> str:
+    """A gamertag as the user meant it, with our own decoration removed."""
+    return _LABEL_TAIL.sub("", q or "").strip()
+
+
 async def search_player(gamertag: str):
     return await asyncio.to_thread(_search_sync, gamertag)
 
