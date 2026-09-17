@@ -81,20 +81,27 @@ ROWS_BY_POS = {
     "LW": ["scoring", "playmaking", "impact", "discipline"],
     "RW": ["scoring", "playmaking", "impact", "discipline"],
     "D":  ["impact", "physicality", "playmaking", "discipline"],
-    "G":  ["savepct", "gaa", "workload", "shutouts"],
+    "G":  ["savepct", "gaa", "shutouts"],
 }
 
 # Used in the compact secondary block, where a long label runs into its value.
 SHORT_LABELS = {"savepct": "SV%", "gaa": "GAA", "scoring": "GOALS",
-                "playmaking": "ASSISTS", "impact": "+/-", "workload": "SAVES"}
+                "playmaking": "ASSISTS", "impact": "+/-"}
 
 LABELS = {
     "scoring": "SCORING", "playmaking": "PLAYMAKING", "production": "PRODUCTION",
     "physicality": "PHYSICALITY", "discipline": "DISCIPLINE", "impact": "PLUS/MINUS",
-    "savepct": "SAVE %", "gaa": "GOALS AGAINST", "workload": "WORKLOAD",
-    "shutouts": "SHUTOUTS",
+    "savepct": "SAVE %", "gaa": "GOALS AGAINST", "shutouts": "SHUTOUTS",
 }
 
+# Goalie note: saves-per-game ("workload") used to be a graded axis and was
+# actively misleading -- it measures how many shots the team in front of him
+# allows, so a goalie behind a good defence graded RED while one getting
+# shelled graded green. Measured live: a 2.79-GAA goalie scored 10th
+# percentile, a 4.81-GAA goalie scored 85th. Shots faced is now printed as a
+# context tile instead, and no recalibration was involved -- the direction
+# was wrong, not the scale.
+#
 # The radar draws EVERY graded skill for the position, not just the four the
 # bar rows pick out -- a fifth axis is what turns a diamond into a shape. The
 # pool has percentile bands for all five skater metrics at every position and
@@ -103,7 +110,7 @@ LABELS = {
 # "how he plays" skills together), so the outline reads as a profile.
 RADAR_AXES = {
     "skater": ["scoring", "playmaking", "impact", "physicality", "discipline"],
-    "G": ["savepct", "gaa", "workload", "shutouts"],
+    "G": ["savepct", "gaa", "shutouts"],
 }
 RADAR_R = 140          # radius of the 100th-percentile ring
 RADAR_LABEL_ROOM = 48  # vertical room for the two-line labels above and below
@@ -121,8 +128,6 @@ def radar_axes(primary: str, rates: dict, is_goalie: bool) -> list[tuple[str, st
     out = []
     for key in RADAR_AXES["G" if is_goalie else "skater"]:
         if key not in rates:
-            continue
-        if key == "workload" and not rates[key]:
             continue
         p = percentile(primary, key, rates[key])
         if p is None:
@@ -365,7 +370,6 @@ def _rates(m: dict) -> dict:
                  impact=ea._num(m.get("skplusmin")) / skater_gp)
     if glgp:
         r.update(savepct=ea._savepct(m), gaa=ea._num(m.get("glgaa")),
-                 workload=ea._num(m.get("glsaves")) / glgp,
                  shutouts=ea._num(m.get("glso")) / glgp)
     return r
 
@@ -452,8 +456,6 @@ def render(m: dict, read: str | None = None, _debug: dict | None = None) -> byte
         # A goalie with games but no recorded saves is missing data, not a
         # player who faced nothing -- ranking that as 0th would be a lie, and
         # the read would then describe him as never seeing the puck.
-        if key == "workload" and not rates[key]:
-            continue
         rows.append((LABELS[key], key, rates[key], percentile(primary, key, rates[key])))
 
     # The other role he plays, ranked in ITS pool -- a goalie's skater numbers
@@ -572,6 +574,11 @@ def render(m: dict, read: str | None = None, _debug: dict | None = None) -> byte
     # ---- headline tiles
     tiles = ([("SV%", _fmt("savepct", rates.get("savepct", 0))),
               ("GAA", _fmt("gaa", rates.get("gaa", 0))),
+              # Shots faced is CONTEXT, not a grade -- it says how busy the
+              # team in front of him keeps him, so it sits with the raw
+              # numbers instead of on the graded good/bad scale.
+              ("SHOTS/GM", f"{(ea._num(m.get('glsaves')) + ea._num(m.get('glga'))) / glgp:.1f}"
+               if glgp else "--"),
               ("GP", f"{glgp:.0f}"), ("SO", f"{ea._num(m.get('glso')):.0f}")]
              if is_goalie else
              [("PTS", f"{points:.0f}"), ("G", f"{goals:.0f}"), ("A", f"{assists:.0f}"),
