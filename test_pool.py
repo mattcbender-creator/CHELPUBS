@@ -89,6 +89,16 @@ def test_fallback_chains_labels_and_floor():
     assert pool["meta"]["positions"]["RW"] == {"floor": 50, "source": "NHL 25", "n": 143}
 
 
+
+def test_goalie_breakaway_and_wins():
+    """Breakaway save% and win% get bands; too few breakaways or no win field
+    leave the player out of that band rather than ranking him at zero."""
+    ok = dict(_player("glgp", 30, 1), glbrksaves="8", glbrkshots="10", glwins="18")
+    thin = dict(_player("glgp", 30, 2), glbrksaves="2", glbrkshots="2")
+    cols = bp.metrics([ok, thin], min_gp=20, min_glgp=20)["G"]
+    assert cols["breakaway"] == [0.8] and cols["winpct"] == [0.6]
+    assert len(cols["savepct"]) == 2
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

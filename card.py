@@ -92,6 +92,7 @@ LABELS = {
     "scoring": "SCORING", "playmaking": "PLAYMAKING", "production": "PRODUCTION",
     "physicality": "PHYSICALITY", "discipline": "DISCIPLINE", "impact": "PLUS/MINUS",
     "savepct": "SAVE %", "gaa": "GOALS AGAINST", "shutouts": "SHUTOUTS",
+    "breakaway": "BREAKAWAYS", "winpct": "WIN %",
 }
 
 # Goalie note: saves-per-game ("workload") used to be a graded axis and was
@@ -105,12 +106,17 @@ LABELS = {
 # The radar draws EVERY graded skill for the position, not just the four the
 # bar rows pick out -- a fifth axis is what turns a diamond into a shape. The
 # pool has percentile bands for all five skater metrics at every position and
-# all four goalie metrics, so nothing here is on a made-up scale. Fixed order:
-# adjacent axes are related (the two scoring skills together, the two
+# every graded goalie metric, so nothing here is on a made-up scale. Fixed
+# order: adjacent axes are related (the two scoring skills together, the two
 # "how he plays" skills together), so the outline reads as a profile.
+# Goalies get five as well, so the shape is a pentagon rather than a bare
+# triangle: the two stopping skills (save %, breakaways) side by side, then
+# the results (wins, shutouts, goals against), with GAA wrapping back round
+# next to save %. Breakaways and wins only exist in pools built after they
+# were added; until the next rebuild those axes are simply dropped.
 RADAR_AXES = {
     "skater": ["scoring", "playmaking", "impact", "physicality", "discipline"],
-    "G": ["savepct", "gaa", "shutouts"],
+    "G": ["savepct", "breakaway", "winpct", "shutouts", "gaa"],
 }
 RADAR_R = 140          # radius of the 100th-percentile ring
 RADAR_LABEL_ROOM = 48  # vertical room for the two-line labels above and below
@@ -197,7 +203,7 @@ def _fmt(metric: str, v: float) -> str:
         return f"{v:.3f}".lstrip("0")
     if metric in ("gaa",):
         return f"{v:.2f}"
-    if metric == "shutouts":
+    if metric in ("shutouts", "breakaway", "winpct"):
         return f"{v * 100:.0f}%"
     return f"{v:.2f}"
 
@@ -371,6 +377,9 @@ def _rates(m: dict) -> dict:
     if glgp:
         r.update(savepct=ea._savepct(m), gaa=ea._num(m.get("glgaa")),
                  shutouts=ea._num(m.get("glso")) / glgp)
+        for key, v in (("breakaway", ea._brksavepct(m)), ("winpct", ea._winpct(m))):
+            if v is not None:
+                r[key] = v
     return r
 
 

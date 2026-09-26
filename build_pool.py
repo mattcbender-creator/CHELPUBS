@@ -238,7 +238,7 @@ def metrics(players: list[dict], min_gp: int = MIN_POOL_GP,
     min_primary_g = primary_floor(min_glgp)
 
     METRICS = ("production", "scoring", "playmaking", "physicality", "discipline",
-               "impact", "savepct", "gaa", "workload", "shutouts")
+               "impact", "savepct", "gaa", "workload", "shutouts", "breakaway", "winpct")
 
     def bucket(pos: str) -> dict[str, list[float]]:
         return cols.setdefault(pos, {k: [] for k in METRICS})
@@ -264,6 +264,14 @@ def metrics(players: list[dict], min_gp: int = MIN_POOL_GP,
             # How busy he is, and how often he shuts the door completely.
             b["workload"].append(ea._num(m.get("glsaves")) / glgp)
             b["shutouts"].append(ea._num(m.get("glso")) / glgp)
+            # Breakaway stops are the one-on-one skill save% blurs into the
+            # rest; wins are what the job is for. Either can be missing.
+            brk = ea._brksavepct(m)
+            if brk is not None:
+                b["breakaway"].append(brk)
+            win = ea._winpct(m)
+            if win is not None:
+                b["winpct"].append(win)
             continue
 
         if skater_gp < min_gp:

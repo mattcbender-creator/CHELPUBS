@@ -70,6 +70,32 @@ def _savepct(m) -> float:
     return v
 
 
+# Fewer breakaways than this and the rate is one lucky stop away from 100%,
+# so it goes ungraded rather than ranked on noise.
+BRK_MIN_SHOTS = 5
+
+
+def _brksavepct(m) -> float | None:
+    """Breakaway save rate, 0-1, or None when he hasn't faced enough of them.
+
+    Computed from the raw counts rather than glbrksavepct, which has the same
+    0.9-vs-90 inconsistency as the overall save percentage.
+    """
+    shots = _num(m.get("glbrkshots"))
+    if shots < BRK_MIN_SHOTS:
+        return None
+    return _num(m.get("glbrksaves")) / shots
+
+
+def _winpct(m) -> float | None:
+    """Wins per game in net, 0-1. None if EA sent no win count at all -- a
+    missing field is not a winless goalie."""
+    glgp = _num(m.get("glgp"))
+    if not glgp or m.get("glwins") is None:
+        return None
+    return _num(m.get("glwins")) / glgp
+
+
 def _case_variants(q: str) -> list[str]:
     """The same query in the casings EA might actually be storing.
 
