@@ -1172,3 +1172,318 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
+
+
+# --------------------------------------------------------------- compare
+# /pubcompare: two players, one card, the matchup card's two-column idiom.
+# Left man blue, right man amber, every skill a diverging bar that grows
+# toward whoever holds it. Both men are ranked against THEIR OWN position,
+# exactly as their /pubscout cards rank them, so a number here is always the
+# number on his own card.
+
+# Overall excludes physicality for skaters, same as /matchup: hits are noise
+# at this level and must not decide "who's better". Shutouts are out for the
+# same reason in net -- a handful of games swing it 60 points.
+_OVERALL_SKIP = ("physicality", "shutouts")
+
+
+def _cmp_side(m: dict) -> dict:
+    posns = _positions(m)
+    primary = posns[0][0] if posns else "?"
+    gp = ea._num(m.get("gamesplayed"))
+    glgp = ea._num(m.get("glgp"))
+    skater_pos = primary if primary != "G" else next((p for p, _ in posns if p != "G"), None)
+    return {"m": m, "name": str(m.get("name") or "unknown"), "primary": primary,
+            "posns": posns, "rates": _rates(m), "gp": gp, "glgp": glgp,
+            "skater_gp": max(gp - glgp, 0), "skater_pos": skater_pos}
+
+
+def compare_data(ma: dict, mb: dict) -> dict:
+    """Everything the compare card and the voice need, computed once.
+
+    Two goalies are compared as goalies. Anything else is compared as
+    skaters, each ranked at his most-played skater position -- so a goalie
+    who skates on the side is judged on his skating. A pure goalie against a
+    pure skater can't be compared on one scale; `error` says so.
+    """
+    a, b = _cmp_side(ma), _cmp_side(mb)
+    goalies = a["primary"] == "G" and b["primary"] == "G"
+    if goalies:
+        keys, pos_a, pos_b = RADAR_AXES["G"], "G", "G"
+        role_a, role_b = a["glgp"], b["glgp"]
+    else:
+        for s in (a, b):
+            if not s["skater_gp"] or not s["skater_pos"]:
+                return {"error": f"{s['name']} only plays goalie -- compare him with another goalie."}
+        keys, pos_a, pos_b = RADAR_AXES["skater"], a["skater_pos"], b["skater_pos"]
+        role_a, role_b = a["skater_gp"], b["skater_gp"]
+    a["pos"], b["pos"], a["role_gp"], b["role_gp"] = pos_a, pos_b, role_a, role_b
+
+    axes = []
+    for key in keys:
+        va, vb = a["rates"].get(key), b["rates"].get(key)
+        pa = percentile(pos_a, key, va) if va is not None else None
+        pb = percentile(pos_b, key, vb) if vb is not None else None
+        axes.append({"key": key, "label": LABELS[key], "va": va, "vb": vb, "pa": pa, "pb": pb})
+
+    def overall(side):
+        ps = [ax[side] for ax in axes if ax[side] is not None and ax["key"] not in _OVERALL_SKIP]
+        return round(sum(ps) / len(ps)) if ps else None
+
+    a["overall"], b["overall"] = overall("pa"), overall("pb")
+    diff = (a["overall"] or 0) - (b["overall"] or 0)
+    # Ties go to the bigger sample: the same grade on more games is the
+    # surer thing, and "who's better" always gets a name.
+    if diff == 0:
+        diff_sign = 1 if role_a >= role_b else -1
+    else:
+        diff_sign = 1 if diff > 0 else -1
+    win, lose = (a, b) if diff_sign > 0 else (b, a)
+    edges = [ax for ax in axes if ax["pa"] is not None and ax["pb"] is not None]
+    return {"a": a, "b": b, "goalies": goalies, "axes": axes,
+            "winner": win, "loser": lose, "margin": abs(diff),
+            "a_skills": sum(1 for ax in edges if ax["pa"] > ax["pb"]),
+            "b_skills": sum(1 for ax in edges if ax["pb"] > ax["pa"]),
+            "small_sample": [s["name"] for s in (a, b) if s["role_gp"] < EARLY_GP]}
+
+
+def compare_headline(c: dict) -> str:
+    """The deterministic one-liner: who's better and by how much. Used as the
+    card's fallback read and as the line the voice clip is held to."""
+    w, l, mg = c["winner"], c["loser"], c["margin"]
+    if mg < 3:
+        how = "by a hair"
+    elif mg < 10:
+        how = "but it's close"
+    elif mg < 20:
+        how = "clearly"
+    else:
+        how = "and it isn't close"
+    return f"{w['name']} is better than {l['name']}, {how}."
+
+
+def format_compare(c: dict) -> str:
+    """Both players flattened for the model: verdict first, then each man's
+    grades. The model never decides who wins -- the code already has."""
+    a, b, w, l = c["a"], c["b"], c["winner"], c["loser"]
+    lines = [f"VERDICT (decided by code -- do not change it): {w['name']} is the better "
+             f"player. Overall {_ordinal(w['overall'] or 0)} vs {_ordinal(l['overall'] or 0)} percentile "
+             f"(margin {c['margin']} points). {compare_headline(c)}",
+             f"Skills won: {a['name']} {c['a_skills']}, {b['name']} {c['b_skills']}.",
+             "Percentiles rank each man against players at HIS OWN position.", ""]
+    for s, side in ((a, "pa"), (b, "pb")):
+        lines.append(f"{s['name']}: mainly {s['pos']} ({s['role_gp']:.0f} games in that role, "
+                     f"{s['gp']:.0f} total). Positions: {ea.pos_line(s['m'])}.")
+        for ax in c["axes"]:
+            v = ax["va"] if side == "pa" else ax["vb"]
+            p = ax[side]
+            if p is not None:
+                lines.append(f"  {ax['label']}: {_ordinal(p)} percentile ({tier(p).lower()}), "
+                             f"rate {_fmt(ax['key'], v)}")
+        lines.append("")
+    lines.append("SKILL BY SKILL (percentile gap):")
+    for ax in c["axes"]:
+        if ax["pa"] is None or ax["pb"] is None:
+            continue
+        g = ax["pa"] - ax["pb"]
+        who = "even" if g == 0 else f"{a['name'] if g > 0 else b['name']} +{abs(g)}"
+        lines.append(f"  {ax['label']}: {ax['pa']} vs {ax['pb']} -> {who}")
+    if c["small_sample"]:
+        lines.append(f"SMALL SAMPLE (under {EARLY_GP} games): {', '.join(c['small_sample'])}.")
+    return "\n".join(lines)
+
+
+_RATE_UNIT = {"scoring": "goals/gm", "playmaking": "assists/gm", "impact": "+/- per gm",
+              "physicality": "hits/gm", "discipline": "PIM/gm", "savepct": "sv%",
+              "gaa": "GAA", "shutouts": "of games"}
+
+
+def _rate(metric: str, v) -> str:
+    """The raw rate under a percentile, with its unit, so 0.52 isn't a riddle."""
+    return "" if v is None else f"{_fmt(metric, v)} {_RATE_UNIT.get(metric, '')}".strip()
+
+
+def render_compare(c: dict, read: str | None = None) -> bytes:
+    """Two players side by side. Header, verdict, tale of the tape, the
+    overlaid skill shape, then one diverging gap bar per skill."""
+    a, b = c["a"], c["b"]
+    f_kicker = _font("bold", 17); f_sub = _font("medium", 18)
+    f_h = _font("bold", 16); f_val = _font("black", 16); f_note = _font("medium", 16)
+    f_read = _font("medium", 24); f_tape = _font("black", 30); f_tlbl = _font("bold", 15)
+    f_gap = _font("black", 20); f_small = _font("bold", 14); f_tiny = _font("medium", 13)
+    f_ov = _font("black", 54)
+
+    tmp = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    read_lines = _wrap(tmp, read or compare_headline(c), f_read, W - 2 * PAD, max_lines=4)
+
+    if c["goalies"]:
+        def tape(s):
+            m, glgp = s["m"], s["glgp"]
+            shots = (ea._num(m.get("glsaves")) + ea._num(m.get("glga"))) / glgp if glgp else 0
+            return [f"{glgp:.0f}", _fmt("savepct", s["rates"].get("savepct", 0)),
+                    _fmt("gaa", s["rates"].get("gaa", 0)), f"{shots:.1f}",
+                    f"{ea._num(m.get('glso')):.0f}"]
+        tape_lbls = ["GAMES IN NET", "SAVE %", "GAA", "SHOTS FACED / GM", "SHUTOUTS"]
+        # which rows carry a "better" side: (index, higher is better)
+        tape_better = {1: True, 2: False}
+    else:
+        def tape(s):
+            m, sg = s["m"], s["skater_gp"]
+            g, a_ = ea._num(m.get("skgoals")), ea._num(m.get("skassists"))
+            return [f"{sg:.0f}", f"{g + a_:.0f}", f"{g:.0f}", f"{a_:.0f}",
+                    f"{(g + a_) / sg:.2f}" if sg else "-",
+                    f"{ea._num(m.get('skplusmin')):+.0f}"]
+        tape_lbls = ["SKATER GAMES", "POINTS", "GOALS", "ASSISTS", "POINTS / GAME", "PLUS / MINUS"]
+        tape_better = {4: True}
+    ta, tb = tape(a), tape(b)
+
+    axes = c["axes"]
+    graded = [ax for ax in axes if ax["pa"] is not None and ax["pb"] is not None]
+    R = 132
+    ROW_H = 96
+    H = (150 + 92                                  # brand + names
+         + 150                                     # overall scoreboard
+         + len(read_lines) * 34 + 26               # the read
+         + 40 + len(tape_lbls) * 46 + 30           # tale of the tape
+         + 40 + 2 * R + 120                        # radar
+         + 40 + len(graded) * ROW_H                # skill ladder
+         + 74)
+    img = Image.new("RGB", (W, H), BG)
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, W, 5], fill=BLUE)
+    mark = logo(54)
+    if mark:
+        img.paste(mark, (PAD, 32), mark)
+    _text(d, (W - PAD, 53), "PUBS PLAYER COMPARE", f_kicker, DIM, anchor="ra")
+
+    # ---- names, two columns
+    y = 104
+    half = (W - 2 * PAD) / 2 - 40
+    for s, x, anchor, col in ((a, PAD, "la", BLUE_TEXT), (b, W - PAD, "ra", THEM)):
+        for size in (40, 34, 28, 24, 20):
+            f = _font("black", size)
+            if d.textlength(s["name"], font=f) <= half:
+                break
+        _text(d, (x, y), s["name"], f, TEXT, anchor=anchor)
+        sub = f"{s['pos']}  ·  {s['role_gp']:.0f} GP  ·  RANKED VS {s['pos']}"
+        _text(d, (x, y + 48), sub, f_sub, col, anchor=anchor)
+    _text(d, (W / 2, y + 22), "VS", _font("black", 24), DIM, anchor="mm")
+    y += 92
+
+    # ---- overall scoreboard: the answer, in two big numbers
+    win_left = c["winner"] is a
+    pw = (W - 2 * PAD - 20) / 2
+    for s, x0, col, is_win in ((a, PAD, BLUE_TEXT, win_left), (b, PAD + pw + 20, THEM, not win_left)):
+        d.rounded_rectangle([x0, y, x0 + pw, y + 126], radius=14,
+                            fill=PANEL if is_win else (18, 21, 27),
+                            outline=col if is_win else None, width=2)
+        ov = s["overall"]
+        _text(d, (x0 + pw / 2, y + 18), "OVERALL", f_small, DIM, anchor="ma")
+        _text(d, (x0 + pw / 2, y + 40), _ordinal(ov) if ov is not None else "--", f_ov,
+              col if is_win else MUTED, anchor="ma")
+        tag = ("BETTER" if is_win else tier(ov)) if ov is not None else "NO GRADE"
+        if is_win and c["margin"]:
+            tag = f"BETTER  +{c['margin']}"
+        _text(d, (x0 + pw / 2, y + 100), tag, f_small, col if is_win else DIM, anchor="ma")
+    y += 150
+
+    # ---- the read: first sentence is always who's better
+    for ln in read_lines:
+        _text(d, (PAD, y), ln, f_read, TEXT)
+        y += 34
+    if c["small_sample"]:
+        _text(d, (W - PAD, y - 6), "SMALL SAMPLE: " + ", ".join(c["small_sample"]),
+              f_small, AMBER, anchor="ra")
+    y += 26
+
+    # ---- tale of the tape: label down the middle, his number either side
+    _text(d, (PAD, y), "TALE OF THE TAPE", f_h, DIM)
+    y += 34
+    d.rounded_rectangle([PAD, y - 6, W - PAD, y + len(tape_lbls) * 46 + 2], radius=12, fill=(18, 21, 27))
+    for i, lbl in enumerate(tape_lbls):
+        ry = y + i * 46
+        if i:
+            d.line([PAD + 20, ry - 2, W - PAD - 20, ry - 2], fill=LINE)
+        ca, cb = TEXT, TEXT
+        if i in tape_better:
+            try:
+                fa, fb = float(ta[i]), float(tb[i])
+                hi = tape_better[i]
+                if fa != fb:
+                    a_better = (fa > fb) == hi
+                    ca, cb = (BLUE_TEXT, MUTED) if a_better else (MUTED, THEM)
+            except ValueError:
+                pass
+        _text(d, (PAD + 28, ry + 21), ta[i], f_tape, ca, anchor="lm")
+        _text(d, (W - PAD - 28, ry + 21), tb[i], f_tape, cb, anchor="rm")
+        _text(d, (W / 2, ry + 21), lbl, f_tlbl, MUTED, anchor="mm")
+    y += len(tape_lbls) * 46 + 30
+
+    # ---- the shape: both men overlaid, values under each axis label
+    _text(d, (PAD, y), "SKILL SHAPE  ·  PERCENTILE AT HIS OWN POSITION", f_h, DIM)
+    ly0 = y + 2
+    _text(d, (W - PAD, ly0 + 8), b["name"][:16], _font("bold", 14), MUTED, anchor="rm")
+    bx = W - PAD - d.textlength(b["name"][:16], font=_font("bold", 14)) - 30
+    d.rounded_rectangle([bx, ly0 + 2, bx + 22, ly0 + 14], radius=3, fill=THEM)
+    _text(d, (bx - 14, ly0 + 8), a["name"][:16], _font("bold", 14), MUTED, anchor="rm")
+    ax_ = bx - 14 - d.textlength(a["name"][:16], font=_font("bold", 14)) - 30
+    d.rounded_rectangle([ax_, ly0 + 2, ax_ + 22, ly0 + 14], radius=3, fill=BLUE_TEXT)
+    y += 40
+    cx, cy = W / 2, y + 40 + R
+    vals_a = [ax["pa"] or 0 for ax in axes]
+    vals_b = [ax["pb"] or 0 for ax in axes]
+    _radar_multi(img, cx, cy, R, [(vals_b, THEM, THEM_FILL), (vals_a, BLUE_TEXT, US_FILL)])
+    d = ImageDraw.Draw(img)
+    n = len(axes)
+    f_axlbl = _font("bold", 14)
+    for i, ax in enumerate(axes):
+        ang = -math.pi / 2 + 2 * math.pi * i / n
+        dx, dy = math.cos(ang), math.sin(ang)
+        x, yv = cx + dx * (R + 44), cy + dy * (R + 30)
+        _text(d, (x, yv - 12), ax["label"], f_axlbl, DIM, anchor="ma")
+        sa = "-" if ax["pa"] is None else str(ax["pa"])
+        sb = "-" if ax["pb"] is None else str(ax["pb"])
+        wa, wm = d.textlength(sa, font=f_val), d.textlength(" · ", font=f_val)
+        x0 = x - (wa + wm + d.textlength(sb, font=f_val)) / 2
+        _text(d, (x0, yv + 7), sa, f_val, BLUE_TEXT)
+        _text(d, (x0 + wa, yv + 7), " · ", f_val, DIM)
+        _text(d, (x0 + wa + wm, yv + 7), sb, f_val, THEM)
+    y = cy + R + 80
+
+    # ---- skill ladder: one diverging bar per skill, toward the better man
+    _text(d, (PAD, y), "SKILL BY SKILL  ·  bar grows toward the better man", f_h, DIM)
+    y += 40
+    cxm, half_w = W / 2, 200
+    for ax in graded:
+        pa, pb = ax["pa"], ax["pb"]
+        d.rounded_rectangle([PAD, y, W - PAD, y + ROW_H - 10], radius=12, fill=(18, 21, 27))
+        _text(d, (PAD + 20, y + 10), ax["label"], f_small, DIM)
+        _text(d, (PAD + 20, y + 32), _ordinal(pa), f_gap, BLUE_TEXT)
+        _text(d, (PAD + 20, y + 60), _rate(ax["key"], ax["va"]), f_tiny, DIM)
+        _text(d, (W - PAD - 20, y + 32), _ordinal(pb), f_gap, THEM, anchor="ra")
+        _text(d, (W - PAD - 20, y + 60), _rate(ax["key"], ax["vb"]), f_tiny, DIM, anchor="ra")
+        ty = y + 52
+        d.line([cxm - half_w, ty, cxm + half_w, ty], fill=(30, 34, 43), width=6)
+        d.line([cxm, ty - 9, cxm, ty + 9], fill=(70, 76, 92), width=2)
+        diff = pa - pb
+        wpx = min(abs(diff), 40) / 40 * half_w
+        if diff > 0:
+            d.rounded_rectangle([cxm - wpx, ty - 5, cxm, ty + 5], radius=4, fill=BLUE)
+        elif diff < 0:
+            d.rounded_rectangle([cxm, ty - 5, cxm + wpx, ty + 5], radius=4, fill=THEM)
+        if diff == 0:
+            lab, col = "EVEN", DIM
+        else:
+            who = a if diff > 0 else b
+            nm = who["name"] if len(who["name"]) <= 14 else who["name"][:13] + "…"
+            lab, col = f"{nm} +{abs(diff)}", (BLUE_TEXT if diff > 0 else THEM)
+        _text(d, (cxm, y + 16), lab, f_gap, col, anchor="ma")
+        y += ROW_H
+
+    fy = H - 56
+    d.line([PAD, fy - 20, W - PAD, fy - 20], fill=LINE)
+    _text(d, (PAD, fy), "chelscout.net", _font("bold", 17), BLUE_TEXT)
+    _text(d, (W - PAD, fy), "SCOUT SMARTER. CHIRP RESPONSIBLY.", _font("bold", 17), DIM, anchor="ra")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()

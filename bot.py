@@ -789,6 +789,194 @@ async def pubscout(interaction: discord.Interaction, gamertag: str,
         await interaction.followup.send(files=files)
 
 
+# -------------------------------------------------------------- pubcompare
+# Who's better is decided by code (card.compare_data: mean percentile at each
+# man's own position), never by the model. The model only explains it, and
+# its first sentence is held to the code's answer -- see _lead_with_winner.
+COMPARE_READ_PROMPT = """You write the headline read at the TOP of a card that
+compares two EA NHL players side by side. The card shows both stat lines, an
+overlaid skill radar and a bar per skill right underneath you, so do NOT read
+numbers back. Say what the comparison MEANS.
+
+Your FIRST SENTENCE says who is better, by gamertag, exactly as the VERDICT
+line gives it. Never hedge it, never flip it, never call it a tie. Then one or
+two sentences on WHERE he's better and where the other man wins anything back.
+
+35-50 words total, no markdown, no bullets. Blunt and readable, not a bit.
+Use only the grade words elite / stud / solid / mid / weak / bad / shitter,
+and only the word each skill is actually given. Percentiles rank each man at
+HIS OWN position. Mention at most one number, verbatim from the data. Never
+invent stats, never do arithmetic, never comment on passing, positioning,
+hockey IQ, chemistry or attitude -- there is no data for those."""
+
+# Appended to each voice's own /pubscout prompt, so the character stays and
+# only the job changes. It says outright that it overrides the one-player rules.
+COMPARE_VOICE_RULE = """THIS CLIP IS A HEAD-TO-HEAD, NOT A ONE-PLAYER REPORT.
+You are comparing TWO players. Everything above about voice, accuracy, banned
+words, no arithmetic and no invented stats still applies. What changes:
+
+- YOUR VERY FIRST SENTENCE SAYS WHO IS BETTER, by gamertag, matching the
+  VERDICT line. Not a warm-up, not a joke first -- the answer first, in your
+  character's voice. Never flip it, never call it even.
+- Then say WHERE he's better and what, if anything, the other man wins back.
+  Name skills, not numbers. At most TWO numbers in the whole clip, each
+  verbatim from the data.
+- Positions get one quick mention each, not a breakdown.
+- There is no STANDOUT TRAIT for this clip; the skill-by-skill gaps are the
+  story. Land the verdict again at the end."""
+
+
+def _first_sentence(script: str) -> str:
+    """First spoken sentence: speaker labels and [tags] removed."""
+    t = re.sub(r"\b(?:NARRATOR|KID):", " ", script)
+    t = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", t).strip()
+    return re.split(r"(?<=[.!?])\s", t, maxsplit=1)[0]
+
+
+def _tag_core(name: str) -> str:
+    """A gamertag the way a voice says it: letters only (SnipeGod99 -> snipegod)."""
+    return re.sub(r"[^a-z]", "", (name or "").lower())
+
+
+def _lead_with_winner(script: str, winner: str, loser: str) -> str:
+    """Guarantee the clip opens by naming who's better. The prompt asks for
+    it; if the model buried it anyway, the code's verdict is put in front."""
+    core = _tag_core(winner) or _norm(winner)
+    first = _first_sentence(script)
+    if core and (core in _tag_core(first) or _norm(winner) in _norm(first)):
+        return script
+    lead = f"{winner} is better than {loser}."
+    m = re.match(r"\s*NARRATOR:\s*", script)
+    if m:
+        return f"NARRATOR: {lead} {script[m.end():]}"
+    return f"{lead} {script}"
+
+
+@tree.command(name="pubcompare", description="Compare two EA NHL players head to head -- who's better and where")
+@app_commands.describe(player1="First EA gamertag (blue)", player2="Second EA gamertag (amber)",
+                       voice="Optionally have the verdict read out loud")
+@app_commands.autocomplete(player1=gamertag_autocomplete, player2=gamertag_autocomplete)
+@app_commands.choices(voice=[
+    app_commands.Choice(name="Canadian hockey guy", value="buddy"),
+    app_commands.Choice(name="Tortorella", value="torts"),
+    app_commands.Choice(name="Trump", value="trump"),
+    app_commands.Choice(name="Don Cherry", value="cherry"),
+    app_commands.Choice(name="1940s Filmstrip", value="narrator"),
+    app_commands.Choice(name="Gilbert Gottfried", value="gilbert"),
+])
+async def pubcompare(interaction: discord.Interaction, player1: str, player2: str,
+                     voice: app_commands.Choice[str] = None):
+    """Two players, one card, a written verdict; a voice choice adds a clip."""
+    await interaction.response.defer()
+    ma, err = await find_scout_target(interaction, player1)
+    if not ma:
+        await interaction.followup.send(err)
+        return
+    mb, err = await find_scout_target(interaction, player2)
+    if not mb:
+        await interaction.followup.send(err)
+        return
+    if _norm(str(ma.get("name"))) == _norm(str(mb.get("name"))):
+        await interaction.followup.send(f"That's **{ma.get('name')}** twice -- give me two different players.")
+        return
+
+    c = card.compare_data(ma, mb)
+    if c.get("error"):
+        await interaction.followup.send(c["error"])
+        return
+    win, lose = c["winner"]["name"], c["loser"]["name"]
+    block = card.format_compare(c)
+    for s in (c["a"], c["b"]):
+        form = await asyncio.to_thread(scout.player_form_block, s["name"])
+        if form:
+            block += f"\n\n{s['name']} RECENT FORM:{form}"
+
+    read = None
+    try:
+        resp = await call_llm(
+            messages=[{"role": "system", "content": COMPARE_READ_PROMPT},
+                      {"role": "user", "content": block}],
+            max_tokens=160, temperature=0.6)
+        read = (resp.choices[0].message.content or "").strip()
+        read = _lead_with_winner(read, win, lose) if read else None
+    except Exception as e:
+        print(f"[pubcompare] read failed: {type(e).__name__}: {e}")
+
+    try:
+        png = await asyncio.to_thread(card.render_compare, c, read)
+    except Exception as e:
+        await interaction.followup.send(f"Card render shit the bed: `{type(e).__name__}: {e}`")
+        return
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "", f"{win}-vs-{lose}")[:60] or "compare"
+    files = [discord.File(io.BytesIO(png), filename=f"{CLIP_BRAND}-pubcompare-{safe}.png")]
+    voice_error = None
+
+    if voice and voice.value == "narrator":
+        try:
+            with_kid = random.random() < vc.NARRATOR_KID_PROB
+            prompt = vc.NARRATOR_SCOUT_PROMPT if with_kid else vc.NARRATOR_SCOUT_SOLO_PROMPT
+            prompt = f"{prompt}\n\n{COMPARE_VOICE_RULE}\n\n{vc.narrator_length_rule(with_kid)}"
+            msgs = [{"role": "system", "content": prompt}, {"role": "user", "content": block}]
+            resp = await call_llm(messages=msgs, max_tokens=260, temperature=0.9)
+            raw = (resp.choices[0].message.content or "").strip()
+            if vc.narrator_needs_retry(raw, with_kid):
+                fix = msgs + [
+                    {"role": "assistant", "content": raw},
+                    {"role": "user", "content": vc.narrator_retry_note(with_kid)},
+                ]
+                resp = await call_llm(messages=fix, max_tokens=260, temperature=0.95)
+                retry = (resp.choices[0].message.content or "").strip()
+                if not vc.narrator_needs_retry(retry, with_kid):
+                    raw = retry
+                elif with_kid:
+                    turns = vc.parse_narrator_script(raw)
+                    raw = f"NARRATOR: {turns[0][1]}" if turns else raw
+            script = _lead_with_winner(raw, win, lose)
+            audio, _ = await vc.speak_narrator(script, max_words=vc.narrator_word_cap(with_kid))
+            spoken_only = " ".join(ln for _, ln in vc.parse_narrator_script(script))
+            log_clip("narrator", spoken_only, audio)
+            files.append(discord.File(io.BytesIO(audio),
+                                      filename=f"{CLIP_BRAND}-pubcompare-narrator.mp3"))
+        except Exception as e:
+            print(f"[pubcompare] voice failed: {type(e).__name__}: {e}")
+            voice_error = f"{type(e).__name__}: {e}"
+    elif voice:
+        prompt_fn, vid_fn, ramped, max_words, keep_er = VOICES[voice.value]
+        try:
+            sys_prompt = f"{prompt_fn()}\n\n{COMPARE_VOICE_RULE}"
+            rule = vc.length_rule(voice.value)
+            if rule:
+                sys_prompt = f"{sys_prompt}\n\n{rule}"
+            resp = await call_llm(
+                messages=[{"role": "system", "content": sys_prompt},
+                          {"role": "user", "content": block}],
+                max_tokens=220, temperature=0.9)
+            script = _lead_with_winner((resp.choices[0].message.content or "").strip(), win, lose)
+            cap = min(max_words, vc.word_cap(voice.value))
+            if ramped:
+                audio, _ = await vc.speak_ramped(
+                    script, vid_fn(), vc.TORTS_SPEED_START, vc.TORTS_SPEED_END,
+                    end_gain=vc.TORTS_GAIN_END, steps=vc.TORTS_RAMP_STEPS,
+                    temp_start=vc.TORTS_TTS_TEMP_START, temp_end=vc.TORTS_TTS_TEMP_END,
+                    max_words=cap)
+            else:
+                audio, _ = await vc.speak(script, voice_id=vid_fn(),
+                                          max_words=cap, keep_er=keep_er)
+            log_clip(voice.value, script, audio, keep_er=keep_er)
+            files.append(discord.File(io.BytesIO(audio),
+                                      filename=f"{CLIP_BRAND}-pubcompare-{voice.value}.mp3"))
+        except Exception as e:
+            print(f"[pubcompare] voice failed: {type(e).__name__}: {e}")
+            voice_error = f"{type(e).__name__}: {e}"
+
+    if voice_error:
+        await interaction.followup.send(
+            f"Card's below -- the **{voice.name}** clip didn't come back: "
+            f"`{voice_error}`"[:2000], files=files)
+    else:
+        await interaction.followup.send(files=files)
+
+
 # --------------------------------------------------------------- clubscout
 CLUB_READ_PROMPT = """You write the headline read at the TOP of a club's scouting
 card -- two or three sentences saying what kind of team this is and whether
@@ -1359,6 +1547,8 @@ HELP = """**ChelScout Pubs**
 
 **Scout a player**
 `/pubscout <gamertag>` -- the stat card and a written read.
+`/pubcompare <player1> <player2>` -- two players side by side; the first line
+says who's better.
 `/clubscout <club name>` -- a club's record, roster shape, last 10 and roster.
 `/matchup <your club> <their club>` -- shapes overlaid, edge per skill, and
 your five against theirs with the skill to attack on each of their guys.
