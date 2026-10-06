@@ -1436,9 +1436,9 @@ def render_compare(c: dict, read: str | None = None) -> bytes:
             pa, pb = ax["pa"], ax["pb"]
             d.rounded_rectangle([PAD, y, W - PAD, y + ROW_H - 10], radius=12, fill=(18, 21, 27))
             _text(d, (PAD + 20, y + 10), ax["label"], f_small, DIM)
-            _text(d, (PAD + 20, y + 32), _ordinal(pa), f_gap, BLUE_TEXT)
+            _text(d, (PAD + 20, y + 32), str(pa), f_gap, BLUE_TEXT)
             _text(d, (PAD + 20, y + 60), _rate(ax["key"], ax["va"]), f_tiny, DIM)
-            _text(d, (W - PAD - 20, y + 32), _ordinal(pb), f_gap, THEM, anchor="ra")
+            _text(d, (W - PAD - 20, y + 32), str(pb), f_gap, THEM, anchor="ra")
             _text(d, (W - PAD - 20, y + 60), _rate(ax["key"], ax["vb"]), f_tiny, DIM, anchor="ra")
             ty = y + 52
             d.line([cxm - half_w, ty, cxm + half_w, ty], fill=(30, 34, 43), width=6)
@@ -1564,7 +1564,7 @@ def render_compare(c: dict, read: str | None = None) -> bytes:
                 p = r["p"]
                 _text(d, (x0 + 20, ry), r["label"], f_rl, MUTED)
                 if p is not None:
-                    _text(d, (x0 + pw - 20, ry - 1), f"{tier(p)}  {_ordinal(p)}", f_tw, _pole(p), anchor="ra")
+                    _text(d, (x0 + pw - 20, ry - 1), f"{tier(p)}  {str(p)}", f_tw, _pole(p), anchor="ra")
                     bx0, bx1 = x0 + 20, x0 + pw - 20
                     d.rounded_rectangle([bx0, ry + 22, bx1, ry + 28], radius=3, fill=(30, 34, 43))
                     d.rounded_rectangle([bx0, ry + 22, bx0 + max((bx1 - bx0) * p / 100, 6), ry + 28],
