@@ -871,7 +871,9 @@ position's skills against his own position. If they play different
 positions say so ("for a D-man", "as a goalie"). If one is a GOALIE, judge
 him only on his goalie grades and the skater only on his skater grades;
 never grade a goalie on scoring or a skater on save percentage. A SIDE NOTE
-role is colour at most, never the verdict.
+role is colour at most, never the verdict. Raw totals (shutouts, goals,
+points) mostly measure games played -- never call a man better for having
+more of one; go by the grades.
 
 35-55 words, no markdown, no bullets. Blunt and readable, not a bit. Use only
 the grade words elite / stud / solid / mid / weak / bad / shitter, and only
@@ -899,6 +901,9 @@ What changes:
 - Each man's grades are in HIS block. Never put one man's grade on the
   other. Use the exact grade word given -- an elite save percentage is
   elite, never "bad". If you're unsure of a grade, skip it.
+- TOTALS ARE MOSTLY GAMES PLAYED. Never argue from a raw total -- "more
+  shutouts", "more goals", "more points" -- when the two have different
+  game counts. Compare grades and per-game rates only.
 - Land the verdict again at the end."""
 
 

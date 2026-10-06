@@ -1338,16 +1338,58 @@ def _rate(metric: str, v) -> str:
     return "" if v is None else f"{_fmt(metric, v)} {_RATE_UNIT.get(metric, '')}".strip()
 
 
+def _per_gm(total: float, gp: float, signed: bool = False) -> tuple[str, float | None]:
+    if not gp:
+        return "-", None
+    r = total / gp
+    return (f"{r:+.2f}" if signed else f"{r:.2f}"), r
+
+
+def _tape(s: dict, goalie: bool) -> list[dict]:
+    """Tale-of-the-tape rows: (label, shown value, number to compare, small
+    raw total, higher-is-better / lower / None). Every counting stat is a
+    per-game rate -- a total is mostly a measure of games played, so 31
+    shutouts in 168 games must not out-shout 10 in 74. The raw total rides
+    along in small print for anyone who wants it."""
+    m = s["m"]
+    if goalie:
+        gp = s["glgp"]
+        so = ea._num(m.get("glso"))
+        shots = (ea._num(m.get("glsaves")) + ea._num(m.get("glga"))) / gp if gp else 0
+        sv, gaa = s["rates"].get("savepct", 0), s["rates"].get("gaa", 0)
+        return [
+            {"lbl": "GAMES IN NET", "val": f"{gp:.0f}", "num": None, "sub": "", "hi": None},
+            {"lbl": "SAVE %", "val": _fmt("savepct", sv), "num": sv, "sub": "", "hi": True},
+            {"lbl": "GAA", "val": _fmt("gaa", gaa), "num": gaa, "sub": "", "hi": False},
+            {"lbl": "SHUTOUT RATE", "val": f"{so / gp * 100:.0f}%" if gp else "-",
+             "num": so / gp if gp else None, "sub": f"{so:.0f} SO", "hi": True},
+            {"lbl": "SHOTS FACED / GM", "val": f"{shots:.1f}", "num": None, "sub": "", "hi": None},
+        ]
+    gp = s["skater_gp"]
+    g, a_ = ea._num(m.get("skgoals")), ea._num(m.get("skassists"))
+    pm = ea._num(m.get("skplusmin"))
+    rows = [{"lbl": "SKATER GAMES", "val": f"{gp:.0f}", "num": None, "sub": "", "hi": None}]
+    for lbl, tot, signed, unit in (("POINTS / GAME", g + a_, False, "PTS"), ("GOALS / GAME", g, False, "G"),
+                                   ("ASSISTS / GAME", a_, False, "A"), ("+/- PER GAME", pm, True, "+/-")):
+        val, num = _per_gm(tot, gp, signed)
+        sub = f"{tot:+.0f} {unit}" if signed else f"{tot:.0f} {unit}"
+        rows.append({"lbl": lbl, "val": val, "num": num, "sub": sub, "hi": True})
+    return rows
+
+
 def _key_stats(s: dict) -> list[tuple[str, str]]:
+    """The four numbers in a cross-role panel -- rates, never raw totals."""
     m = s["m"]
     if s["is_g"]:
+        gp = s["glgp"]
+        so = ea._num(m.get("glso"))
         return [("SV%", _fmt("savepct", s["rates"].get("savepct", 0))),
                 ("GAA", _fmt("gaa", s["rates"].get("gaa", 0))),
-                ("SO", f"{ea._num(m.get('glso')):.0f}"), ("GP", f"{s['glgp']:.0f}")]
+                ("SO RATE", f"{so / gp * 100:.0f}%" if gp else "-"), ("GP", f"{gp:.0f}")]
     sg = s["skater_gp"]
     g, a_ = ea._num(m.get("skgoals")), ea._num(m.get("skassists"))
-    return [("P/GP", f"{(g + a_) / sg:.2f}" if sg else "-"), ("G", f"{g:.0f}"),
-            ("A", f"{a_:.0f}"), ("+/-", f"{ea._num(m.get('skplusmin')):+.0f}")]
+    return [("P/GP", _per_gm(g + a_, sg)[0]), ("G/GP", _per_gm(g, sg)[0]),
+            ("A/GP", _per_gm(a_, sg)[0]), ("+/- /GP", _per_gm(ea._num(m.get("skplusmin")), sg, True)[0])]
 
 
 # Panel geometry for the cross-role card.
@@ -1381,10 +1423,8 @@ def render_compare(c: dict, read: str | None = None) -> bytes:
     R, ROW_H = 132, 96
     tape_lbls = []
     if not c["cross"]:
-        if c["goalies"]:
-            tape_lbls = ["GAMES IN NET", "SAVE %", "GAA", "SHOTS FACED / GM", "SHUTOUTS"]
-        else:
-            tape_lbls = ["SKATER GAMES", "POINTS", "GOALS", "ASSISTS", "POINTS / GAME", "PLUS / MINUS"]
+        ta, tb = _tape(a, c["goalies"]), _tape(b, c["goalies"])
+        tape_lbls = [r["lbl"] for r in ta]
         main_rows = ladder_rows(c["axes"]) + overall_row
         middle_h = (40 + len(tape_lbls) * 46 + 30) + (40 + 2 * R + 120) + (40 + len(main_rows) * ROW_H)
     else:
@@ -1460,43 +1500,29 @@ def render_compare(c: dict, read: str | None = None) -> bytes:
         return y
 
     if not c["cross"]:
-        # ---- tale of the tape: label down the middle, his number either side
-        if c["goalies"]:
-            def tape(s):
-                m, glgp = s["m"], s["glgp"]
-                shots = (ea._num(m.get("glsaves")) + ea._num(m.get("glga"))) / glgp if glgp else 0
-                return [f"{glgp:.0f}", _fmt("savepct", s["rates"].get("savepct", 0)),
-                        _fmt("gaa", s["rates"].get("gaa", 0)), f"{shots:.1f}",
-                        f"{ea._num(m.get('glso')):.0f}"]
-            tape_better = {1: True, 2: False}
-        else:
-            def tape(s):
-                m, sg = s["m"], s["skater_gp"]
-                g, a_ = ea._num(m.get("skgoals")), ea._num(m.get("skassists"))
-                return [f"{sg:.0f}", f"{g + a_:.0f}", f"{g:.0f}", f"{a_:.0f}",
-                        f"{(g + a_) / sg:.2f}" if sg else "-",
-                        f"{ea._num(m.get('skplusmin')):+.0f}"]
-            tape_better = {4: True}
-        ta, tb = tape(a), tape(b)
-        _text(d, (PAD, y), "TALE OF THE TAPE", f_h, DIM)
+        # ---- tale of the tape: label down the middle, his rate either side,
+        # the better rate in his colour, the raw total in small print.
+        f_sub_t = _font("medium", 13)
+        _text(d, (PAD, y), "TALE OF THE TAPE  ·  PER GAME", f_h, DIM)
         y += 34
         d.rounded_rectangle([PAD, y - 6, W - PAD, y + len(tape_lbls) * 46 + 2], radius=12, fill=(18, 21, 27))
-        for i, lbl in enumerate(tape_lbls):
+        for i, (ra, rb) in enumerate(zip(ta, tb)):
             ry = y + i * 46
             if i:
                 d.line([PAD + 20, ry - 2, W - PAD - 20, ry - 2], fill=LINE)
             ca, cb = TEXT, TEXT
-            if i in tape_better:
-                try:
-                    fa, fb = float(ta[i]), float(tb[i])
-                    if fa != fb:
-                        a_better = (fa > fb) == tape_better[i]
-                        ca, cb = (BLUE_TEXT, MUTED) if a_better else (MUTED, THEM)
-                except ValueError:
-                    pass
-            _text(d, (PAD + 28, ry + 21), ta[i], f_tape, ca, anchor="lm")
-            _text(d, (W - PAD - 28, ry + 21), tb[i], f_tape, cb, anchor="rm")
-            _text(d, (W / 2, ry + 21), lbl, f_tlbl, MUTED, anchor="mm")
+            if ra["hi"] is not None and ra["num"] is not None and rb["num"] is not None \
+                    and round(ra["num"], 4) != round(rb["num"], 4):
+                a_better = (ra["num"] > rb["num"]) == ra["hi"]
+                ca, cb = (BLUE_TEXT, MUTED) if a_better else (MUTED, THEM)
+            _text(d, (PAD + 28, ry + 21), ra["val"], f_tape, ca, anchor="lm")
+            _text(d, (W - PAD - 28, ry + 21), rb["val"], f_tape, cb, anchor="rm")
+            if ra["sub"]:
+                wa = d.textlength(ra["val"], font=f_tape)
+                _text(d, (PAD + 28 + wa + 12, ry + 26), ra["sub"], f_sub_t, DIM, anchor="lm")
+                wb = d.textlength(rb["val"], font=f_tape)
+                _text(d, (W - PAD - 28 - wb - 12, ry + 26), rb["sub"], f_sub_t, DIM, anchor="rm")
+            _text(d, (W / 2, ry + 21), ra["lbl"], f_tlbl, MUTED, anchor="mm")
         y += len(tape_lbls) * 46 + 30
 
         # ---- the shape: both men overlaid
