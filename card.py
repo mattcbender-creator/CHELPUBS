@@ -1270,7 +1270,12 @@ def format_compare(c: dict) -> str:
              f"player. Overall {_ordinal(w['overall'] or 0)} vs {_ordinal(l['overall'] or 0)} percentile "
              f"(margin {c['margin']} points). {compare_headline(c)}",
              f"Skills won: {a['name']} {c['a_skills']}, {b['name']} {c['b_skills']}.",
-             "Percentiles rank each man against players at HIS OWN position.", ""]
+             "Percentiles rank each man against players at HIS OWN position."]
+    if a["pos"] != b["pos"]:
+        lines.append(f"DIFFERENT POSITIONS: {a['name']} is a {a['pos']}, {b['name']} is a {b['pos']}. "
+                     "Each is graded against his own position, so this says who is better AT HIS "
+                     "OWN JOB -- say that, and don't compare raw scoring as if they played the same spot.")
+    lines.append("")
     for s, side in ((a, "pa"), (b, "pb")):
         lines.append(f"{s['name']}: mainly {s['pos']} ({s['role_gp']:.0f} games in that role, "
                      f"{s['gp']:.0f} total). Positions: {ea.pos_line(s['m'])}.")
@@ -1309,12 +1314,11 @@ def render_compare(c: dict, read: str | None = None) -> bytes:
     a, b = c["a"], c["b"]
     f_kicker = _font("bold", 17); f_sub = _font("medium", 18)
     f_h = _font("bold", 16); f_val = _font("black", 16); f_note = _font("medium", 16)
-    f_read = _font("medium", 24); f_tape = _font("black", 30); f_tlbl = _font("bold", 15)
+    f_read = _font("medium", 27); f_tape = _font("black", 30); f_tlbl = _font("bold", 15)
     f_gap = _font("black", 20); f_small = _font("bold", 14); f_tiny = _font("medium", 13)
-    f_ov = _font("black", 54)
 
     tmp = ImageDraw.Draw(Image.new("RGB", (10, 10)))
-    read_lines = _wrap(tmp, read or compare_headline(c), f_read, W - 2 * PAD, max_lines=4)
+    read_lines = _wrap(tmp, read or compare_headline(c), f_read, W - 2 * PAD - 24, max_lines=5)
 
     if c["goalies"]:
         def tape(s):
@@ -1339,11 +1343,15 @@ def render_compare(c: dict, read: str | None = None) -> bytes:
 
     axes = c["axes"]
     graded = [ax for ax in axes if ax["pa"] is not None and ax["pb"] is not None]
+    # The overall lives at the bottom of the ladder, not the top: the top of
+    # the card is commentary, and the number is there for anyone who checks.
+    if a["overall"] is not None and b["overall"] is not None:
+        graded = graded + [{"key": "overall", "label": "OVERALL",
+                            "va": None, "vb": None, "pa": a["overall"], "pb": b["overall"]}]
     R = 132
     ROW_H = 96
     H = (150 + 92                                  # brand + names
-         + 150                                     # overall scoreboard
-         + len(read_lines) * 34 + 26               # the read
+         + len(read_lines) * 36 + 40               # the read
          + 40 + len(tape_lbls) * 46 + 30           # tale of the tape
          + 40 + 2 * R + 120                        # radar
          + 40 + len(graded) * ROW_H                # skill ladder
@@ -1370,31 +1378,18 @@ def render_compare(c: dict, read: str | None = None) -> bytes:
     _text(d, (W / 2, y + 22), "VS", _font("black", 24), DIM, anchor="mm")
     y += 92
 
-    # ---- overall scoreboard: the answer, in two big numbers
-    win_left = c["winner"] is a
-    pw = (W - 2 * PAD - 20) / 2
-    for s, x0, col, is_win in ((a, PAD, BLUE_TEXT, win_left), (b, PAD + pw + 20, THEM, not win_left)):
-        d.rounded_rectangle([x0, y, x0 + pw, y + 126], radius=14,
-                            fill=PANEL if is_win else (18, 21, 27),
-                            outline=col if is_win else None, width=2)
-        ov = s["overall"]
-        _text(d, (x0 + pw / 2, y + 18), "OVERALL", f_small, DIM, anchor="ma")
-        _text(d, (x0 + pw / 2, y + 40), _ordinal(ov) if ov is not None else "--", f_ov,
-              col if is_win else MUTED, anchor="ma")
-        tag = ("BETTER" if is_win else tier(ov)) if ov is not None else "NO GRADE"
-        if is_win and c["margin"]:
-            tag = f"BETTER  +{c['margin']}"
-        _text(d, (x0 + pw / 2, y + 100), tag, f_small, col if is_win else DIM, anchor="ma")
-    y += 150
-
-    # ---- the read: first sentence is always who's better
+    # ---- the read leads the card: commentary, first sentence = who's
+    # better, with a rule down the side in the winner's colour.
+    win_col = BLUE_TEXT if c["winner"] is a else THEM
+    ry0 = y
     for ln in read_lines:
-        _text(d, (PAD, y), ln, f_read, TEXT)
-        y += 34
+        _text(d, (PAD + 24, y), ln, f_read, TEXT)
+        y += 36
+    d.rounded_rectangle([PAD, ry0 + 2, PAD + 5, y - 6], radius=2, fill=win_col)
     if c["small_sample"]:
-        _text(d, (W - PAD, y - 6), "SMALL SAMPLE: " + ", ".join(c["small_sample"]),
+        _text(d, (W - PAD, y + 2), "SMALL SAMPLE: " + ", ".join(c["small_sample"]),
               f_small, AMBER, anchor="ra")
-    y += 26
+    y += 40
 
     # ---- tale of the tape: label down the middle, his number either side
     _text(d, (PAD, y), "TALE OF THE TAPE", f_h, DIM)

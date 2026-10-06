@@ -798,14 +798,19 @@ compares two EA NHL players side by side. The card shows both stat lines, an
 overlaid skill radar and a bar per skill right underneath you, so do NOT read
 numbers back. Say what the comparison MEANS.
 
+This is COMMENTARY, not a stat readout. NO NUMBERS AT ALL -- no
+percentiles, no "75th", no rates, no games played. The numbers are all on the
+card below you; your job is the take.
+
 Your FIRST SENTENCE says who is better, by gamertag, exactly as the VERDICT
 line gives it. Never hedge it, never flip it, never call it a tie. Then one or
 two sentences on WHERE he's better and where the other man wins anything back.
+If they play DIFFERENT POSITIONS, say so ("for a D-man", "as a winger") --
+each is graded against his own position.
 
-35-50 words total, no markdown, no bullets. Blunt and readable, not a bit.
+35-55 words total, no markdown, no bullets. Blunt and readable, not a bit.
 Use only the grade words elite / stud / solid / mid / weak / bad / shitter,
-and only the word each skill is actually given. Percentiles rank each man at
-HIS OWN position. Mention at most one number, verbatim from the data. Never
+and only the word each skill is actually given. Never
 invent stats, never do arithmetic, never comment on passing, positioning,
 hockey IQ, chemistry or attitude -- there is no data for those."""
 
