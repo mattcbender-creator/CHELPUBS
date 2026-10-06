@@ -188,7 +188,7 @@ def _radar(img, cx: float, cy: float, r: float, axes: list, f_lbl, f_word) -> li
         lx, ly = x + dx * 34, y + dy * 26
         anchor = "lm" if dx > 0.3 else ("rm" if dx < -0.3 else "mm")
         _text(d, (lx, ly - 11), lbl, f_lbl, MUTED, anchor=anchor)
-        _text(d, (lx, ly + 9), f"{tier(p)}  {_ordinal(p)}", f_word, _pole(p), anchor=anchor)
+        _text(d, (lx, ly + 9), f"{tier(p)}  {p}", f_word, _pole(p), anchor=anchor)
     return pts
 
 # Shown to the right of each bar, so a reader sees the raw rate, not only a rank.
@@ -408,7 +408,7 @@ def _bar_row(d, y, lbl, metric, value, p, f_lbl, f_val, f_small, small=False):
         d.rounded_rectangle([x0, y + 6, x0 + w, y + 6 + h], radius=h // 2, fill=col)
         _text(d, (W - PAD, y - 2), tier(p), f_val, TEXT, anchor="ra")
         if not small:
-            _text(d, (W - PAD, y + 21), _ordinal(p), f_small, DIM, anchor="ra")
+            _text(d, (W - PAD, y + 21), str(p), f_small, DIM, anchor="ra")
     else:
         _text(d, (W - PAD, y + 2), "n/a", f_val, DIM, anchor="ra")
     _text(d, (x0 - 16, y + 2), _fmt(metric, value), f_val, MUTED, anchor="ra")
@@ -835,7 +835,7 @@ def render_club(s: dict, read: str | None = None) -> bytes:
             wbar = max((x1 - x0) * p / 100, h)
             d.rounded_rectangle([x0, y + 6, x0 + wbar, y + 6 + h], radius=h // 2, fill=_pole(p))
             _text(d, (W - PAD, y - 2), tier(p), _font("bold", 19), TEXT, anchor="ra")
-            _text(d, (W - PAD, y + 21), _ordinal(p), f_note, DIM, anchor="ra")
+            _text(d, (W - PAD, y + 21), str(p), f_note, DIM, anchor="ra")
             y += 50
         y += 14
 
@@ -865,7 +865,7 @@ def render_club(s: dict, read: str | None = None) -> bytes:
         p = r.get("grade")
         if p is not None:
             _text(d, (W - PAD, y + 2), tier(p), _font("bold", 18), _pole(p), anchor="ra")
-            _text(d, (W - PAD - 92, y + 6), _ordinal(p), _font("medium", 14), DIM, anchor="ra")
+            _text(d, (W - PAD - 92, y + 6), str(p), _font("medium", 14), DIM, anchor="ra")
         else:
             _text(d, (W - PAD, y + 2), "n/a", _font("bold", 18), DIM, anchor="ra")
         y += 42
@@ -1096,7 +1096,7 @@ def render_matchup(a: dict, b: dict, pairs: list, read: str | None = None,
             return "no goalie sample"
         pct = g.get("grade")
         return (f"{g['name']}  {g['rates']['savepct']:.3f} sv%  {g['rates'].get('gaa', 0):.2f} GAA"
-                + (f"  ·  {pct}th" if pct is not None else ""))
+                + (f"  ·  {pct}" if pct is not None else ""))
     _text(d, (PAD, y), gline(a), f_note, BLUE_TEXT)
     _text(d, (W - PAD, y), gline(b), f_note, THEM, anchor="ra")
     _text(d, (W / 2, y), "IN NET", f_h, DIM, anchor="ma")

@@ -360,7 +360,61 @@ intents = discord.Intents.default()
 # the model writes the replies, so make it impossible for a generated answer
 # to ping anyone -- tagged players are already swapped to plain names
 client = discord.Client(intents=intents, allowed_mentions=discord.AllowedMentions.none())
-tree = app_commands.CommandTree(client)
+
+# ------------------------------------------------------------ other servers
+# With PUBLIC_MODE on, the commands are registered globally, so the bot works
+# in any server that adds it -- but only for people who are ALSO members of
+# the home server (DISCORD_GUILD_ID). Everyone else gets a private "join us"
+# note with JOIN_URL instead of an answer. Off (the default), the commands
+# exist in the home server only, exactly as before.
+PUBLIC_MODE = os.getenv("PUBLIC_MODE", "0").strip().lower() in ("1", "true", "yes", "on")
+JOIN_URL = os.getenv("JOIN_URL", "").strip()
+# Members are remembered for an hour; a "not a member" for two minutes, so
+# someone who joins after being turned away isn't stuck waiting.
+_MEMBER_TTL, _NONMEMBER_TTL = 3600, 120
+_member_cache: dict[int, tuple[float, bool]] = {}
+
+
+async def is_home_member(user_id: int) -> bool:
+    """True if this user is in the home server. One REST lookup per user per
+    TTL -- no privileged members intent needed. Raises if Discord itself
+    can't be asked, so the caller can say so instead of wrongly refusing."""
+    hit = _member_cache.get(user_id)
+    if hit and time.time() < hit[0]:
+        return hit[1]
+    try:
+        await client.http.get_member(int(GUILD_ID), user_id)
+        ok = True
+    except discord.NotFound:
+        ok = False
+    _member_cache[user_id] = (time.time() + (_MEMBER_TTL if ok else _NONMEMBER_TTL), ok)
+    return ok
+
+
+class GatedTree(app_commands.CommandTree):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not GUILD_ID or interaction.guild_id == int(GUILD_ID):
+            return True
+        is_cmd = interaction.type == discord.InteractionType.application_command
+        try:
+            if await is_home_member(interaction.user.id):
+                return True
+            msg = ("ChelScout Pubs is for members of the ChelScout Discord. "
+                   + (f"Join here and it works everywhere: {JOIN_URL}" if JOIN_URL
+                      else "Join the server and it works everywhere."))
+        except Exception as e:
+            print(f"[gate] membership lookup failed for {interaction.user.id}: {type(e).__name__}: {e}")
+            msg = "Couldn't check your ChelScout membership just now -- try again in a minute."
+        # Autocomplete can only answer with suggestions, so it just stays empty.
+        if is_cmd:
+            try:
+                await interaction.response.send_message(msg, ephemeral=True)
+            except Exception:
+                pass
+        return False
+
+
+tree = GatedTree(client)
 
 @tree.command(name="ask-buddy", description="Ask anything, answered by the Canadian hockey guy")
 @app_commands.describe(question="What do you want to know?")
@@ -1544,6 +1598,11 @@ async def scout_web():
 @tree.command(name="rebuild-pool", description="Re-sample EA and rebuild the percentile pool now (admins)")
 @app_commands.default_permissions(administrator=True)
 async def rebuild_pool_cmd(interaction: discord.Interaction):
+    # Global in PUBLIC_MODE, where any other server's admins would see it.
+    # The pool is ours; only the home server may rebuild it.
+    if GUILD_ID and interaction.guild_id != int(GUILD_ID):
+        await interaction.response.send_message("Only the ChelScout server can rebuild the pool.", ephemeral=True)
+        return
     await interaction.response.defer(ephemeral=True)
     p = card.pool().get("meta", {})
     await interaction.followup.send(
@@ -1616,12 +1675,19 @@ async def on_app_command_error(interaction: discord.Interaction,
 
 @client.event
 async def on_ready():
-    if GUILD_ID:
+    if GUILD_ID and not PUBLIC_MODE:
         guild = discord.Object(id=int(GUILD_ID))
         tree.copy_global_to(guild=guild)
         await tree.sync(guild=guild)
     else:
+        if GUILD_ID:
+            # Drop the old home-server-only copies, or the home server would
+            # list every command twice (its own copy plus the global one).
+            guild = discord.Object(id=int(GUILD_ID))
+            tree.clear_commands(guild=guild)
+            await tree.sync(guild=guild)
         await tree.sync()
+        print(f"[gate] public mode: commands global, members of {GUILD_ID} only", flush=True)
     print(f"Logged in as {client.user} | model={MODEL}")
     p = card.pool().get("meta", {})
     print(f"[pool] using {card.POOL_PATH}: {p.get('season', 'unstamped')} built "
