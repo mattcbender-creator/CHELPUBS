@@ -651,6 +651,33 @@ VOICES = {
 }
 
 
+async def scout_block(m: dict) -> tuple[str, dict | None]:
+    """Everything the model gets about one player on /pubscout: raw stats,
+    the card's percentiles, recent form and the standout trait. /pubcompare
+    hands each voice one of these per player, so a head-to-head clip knows
+    exactly what that voice's solo report would."""
+    standout = ea.standout_trait(m)
+    primary = (card._positions(m) or [("?", 0)])[0][0]
+    rates = card._rates(m)
+    pcts = []
+    for key in card.ROWS_BY_POS.get(primary, []):
+        if key in rates:
+            pc = card.percentile(primary, key, rates[key])
+            if pc is not None:
+                pcts.append(f"  {card.LABELS[key]}: {pc}th percentile among {primary} "
+                            f"(his rate {rates[key]:.2f})")
+    block = ea.format_stats(m)
+    block += (f"\n\nPERCENTILE RANKS vs other {primary} with 50+ games -- these are what "
+              f"the card shows, do not contradict them:\n" + "\n".join(pcts))
+    form = await asyncio.to_thread(scout.player_form_block, str(m.get("name")))
+    if form:
+        block += form
+    if standout:
+        block += (f"\n\nSTANDOUT TRAIT to focus on: {standout['trait']} -- "
+                  f"{standout['grade']} ({standout['detail']})")
+    return block, standout
+
+
 @tree.command(name="pubscout", description="Scout an EA NHL player by gamertag")
 @app_commands.describe(gamertag="EA gamertag to look up",
                        voice="Optionally have the report read out loud")
@@ -672,25 +699,7 @@ async def pubscout(interaction: discord.Interaction, gamertag: str,
         await interaction.followup.send(err)
         return
 
-    standout = ea.standout_trait(m)
-    primary = (card._positions(m) or [("?", 0)])[0][0]
-    rates = card._rates(m)
-    pcts = []
-    for key in card.ROWS_BY_POS.get(primary, []):
-        if key in rates:
-            pc = card.percentile(primary, key, rates[key])
-            if pc is not None:
-                pcts.append(f"  {card.LABELS[key]}: {pc}th percentile among {primary} "
-                            f"(his rate {rates[key]:.2f})")
-    block = ea.format_stats(m)
-    block += (f"\n\nPERCENTILE RANKS vs other {primary} with 50+ games -- these are what "
-              f"the card shows, do not contradict them:\n" + "\n".join(pcts))
-    form = await asyncio.to_thread(scout.player_form_block, str(m.get("name")))
-    if form:
-        block += form
-    if standout:
-        block += (f"\n\nSTANDOUT TRAIT to focus on: {standout['trait']} -- "
-                  f"{standout['grade']} ({standout['detail']})")
+    block, standout = await scout_block(m)
 
     # The card still renders if the model call fails -- it just goes out
     # without the written read.
@@ -794,41 +803,49 @@ async def pubscout(interaction: discord.Interaction, gamertag: str,
 # man's own position), never by the model. The model only explains it, and
 # its first sentence is held to the code's answer -- see _lead_with_winner.
 COMPARE_READ_PROMPT = """You write the headline read at the TOP of a card that
-compares two EA NHL players side by side. The card shows both stat lines, an
-overlaid skill radar and a bar per skill right underneath you, so do NOT read
-numbers back. Say what the comparison MEANS.
-
-This is COMMENTARY, not a stat readout. NO NUMBERS AT ALL -- no
-percentiles, no "75th", no rates, no games played. The numbers are all on the
-card below you; your job is the take.
+compares two EA NHL players side by side. Every number is printed on the card
+right underneath you. This is COMMENTARY, not a stat readout: NO NUMBERS AT
+ALL -- no percentiles, no "75th", no rates, no games played.
 
 Your FIRST SENTENCE says who is better, by gamertag, exactly as the VERDICT
-line gives it. Never hedge it, never flip it, never call it a tie. Then one or
-two sentences on WHERE he's better and where the other man wins anything back.
-If they play DIFFERENT POSITIONS, say so ("for a D-man", "as a winger") --
-each is graded against his own position.
+gives it. Never hedge it, never flip it, never call it a tie. Then one or two
+sentences on WHY: what each man is at his own job, and anything the loser
+wins back.
 
-35-55 words total, no markdown, no bullets. Blunt and readable, not a bit.
-Use only the grade words elite / stud / solid / mid / weak / bad / shitter,
-and only the word each skill is actually given. Never
-invent stats, never do arithmetic, never comment on passing, positioning,
-hockey IQ, chemistry or attitude -- there is no data for those."""
+"Better" means better AT HIS OWN JOB -- each man is graded on his own
+position's skills against his own position. If they play different
+positions say so ("for a D-man", "as a goalie"). If one is a GOALIE, judge
+him only on his goalie grades and the skater only on his skater grades;
+never grade a goalie on scoring or a skater on save percentage. A SIDE NOTE
+role is colour at most, never the verdict.
 
-# Appended to each voice's own /pubscout prompt, so the character stays and
-# only the job changes. It says outright that it overrides the one-player rules.
-COMPARE_VOICE_RULE = """THIS CLIP IS A HEAD-TO-HEAD, NOT A ONE-PLAYER REPORT.
-You are comparing TWO players. Everything above about voice, accuracy, banned
-words, no arithmetic and no invented stats still applies. What changes:
+35-55 words, no markdown, no bullets. Blunt and readable, not a bit. Use only
+the grade words elite / stud / solid / mid / weak / bad / shitter, and only
+the word each skill is actually given -- read it off the data, never guess
+one. Never comment on passing, positioning, hockey IQ, chemistry or attitude
+-- there is no data for those."""
+
+# Appended to each voice's own /pubscout prompt: the character and every
+# rule of his normal scouting report stay; only the shape of the job changes.
+COMPARE_VOICE_RULE = """THIS CLIP IS A HEAD-TO-HEAD: TWO PLAYERS, NOT ONE.
+Everything above still applies, to EACH player, exactly as in your normal
+scouting report -- same voice, same length, same accuracy rules, same number
+rules, cover each man's positions, use each man's STANDOUT TRAIT. You get one
+full player block per man below, the same block your solo report would get.
+What changes:
 
 - YOUR VERY FIRST SENTENCE SAYS WHO IS BETTER, by gamertag, matching the
-  VERDICT line. Not a warm-up, not a joke first -- the answer first, in your
-  character's voice. Never flip it, never call it even.
-- Then say WHERE he's better and what, if anything, the other man wins back.
-  Name skills, not numbers. At most TWO numbers in the whole clip, each
-  verbatim from the data.
-- Positions get one quick mention each, not a breakdown.
-- There is no STANDOUT TRAIT for this clip; the skill-by-skill gaps are the
-  story. Land the verdict again at the end."""
+  VERDICT. The answer first, in your character's voice -- no warm-up before
+  it. Never flip it, never call it even.
+- Then each man in turn, the way your normal report would do him, but
+  shorter -- the room is split two ways. ONE number per man, max.
+- "Better" means better AT HIS OWN JOB. If one is a GOALIE, talk about him
+  as a goalie with his goalie grades; never grade a goalie on scoring or a
+  skater on save percentage. If they play different positions, say so.
+- Each man's grades are in HIS block. Never put one man's grade on the
+  other. Use the exact grade word given -- an elite save percentage is
+  elite, never "bad". If you're unsure of a grade, skip it.
+- Land the verdict again at the end."""
 
 
 def _first_sentence(script: str) -> str:
@@ -886,15 +903,11 @@ async def pubcompare(interaction: discord.Interaction, player1: str, player2: st
         return
 
     c = card.compare_data(ma, mb)
-    if c.get("error"):
-        await interaction.followup.send(c["error"])
-        return
     win, lose = c["winner"]["name"], c["loser"]["name"]
     block = card.format_compare(c)
     for s in (c["a"], c["b"]):
-        form = await asyncio.to_thread(scout.player_form_block, s["name"])
-        if form:
-            block += f"\n\n{s['name']} RECENT FORM:{form}"
+        pb, _ = await scout_block(s["m"])
+        block += f"\n\n===== PLAYER BLOCK: {s['name']} =====\n{pb}"
 
     read = None
     try:
