@@ -949,10 +949,9 @@ async def pubcompare(interaction: discord.Interaction, player1: str, player2: st
                      voice: app_commands.Choice[str] = None):
     """Two players, one card, a written verdict; a voice choice adds a clip.
 
-    Built for speed: both EA lookups run at once, the card's read and the
-    voice script are written at the same time, and the card goes out the
-    moment it's drawn -- the clip follows as a reply when the audio is done,
-    rather than holding the card hostage to the slowest step."""
+    Built for speed: both EA lookups run at once and the card's read and
+    the voice clip are made at the same time. Card and clip still go out as
+    ONE message (Matt's call), like /pubscout."""
     await interaction.response.defer()
     (ma, err_a), (mb, err_b) = await asyncio.gather(
         find_scout_target(interaction, player1), find_scout_target(interaction, player2))
@@ -992,24 +991,20 @@ async def pubcompare(interaction: discord.Interaction, player1: str, player2: st
         await interaction.followup.send(f"Card render shit the bed: `{type(e).__name__}: {e}`")
         return
     safe = re.sub(r"[^A-Za-z0-9_-]+", "", f"{win}-vs-{lose}")[:60] or "compare"
-    msg = await interaction.followup.send(
-        file=discord.File(io.BytesIO(png), filename=f"{CLIP_BRAND}-pubcompare-{safe}.png"), wait=True)
+    files = [discord.File(io.BytesIO(png), filename=f"{CLIP_BRAND}-pubcompare-{safe}.png")]
+    # One message, card and clip together -- the clip was written alongside
+    # the card, so this only waits for whatever audio is still rendering.
     if not clip_task:
+        await interaction.followup.send(files=files)
         return
-
     audio, voice_error = await clip_task
     if audio:
-        clip = discord.File(io.BytesIO(audio), filename=f"{CLIP_BRAND}-pubcompare-{voice.value}.mp3")
-        try:
-            await msg.reply(file=clip, mention_author=False)
-        except Exception:
-            # A reply can fail where the bot can't read history; a plain
-            # followup on the same interaction always works.
-            await interaction.followup.send(file=discord.File(
-                io.BytesIO(audio), filename=f"{CLIP_BRAND}-pubcompare-{voice.value}.mp3"))
+        files.append(discord.File(io.BytesIO(audio), filename=f"{CLIP_BRAND}-pubcompare-{voice.value}.mp3"))
+        await interaction.followup.send(files=files)
     else:
         await interaction.followup.send(
-            f"The **{voice.name}** clip didn't come back: `{voice_error}`"[:2000])
+            f"Card's below -- the **{voice.name}** clip didn't come back: `{voice_error}`"[:2000],
+            files=files)
 
 
 async def _compare_clip(voice: str, block: str, win: str, lose: str) -> tuple[bytes | None, str | None]:

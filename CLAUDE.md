@@ -48,8 +48,9 @@ client -- patch `discord.Client.run` to a no-op to import it in a test.
   the model gets each player's full `scout_block()` (the same block
   `/pubscout` uses -- extracted tonight, output unchanged). That fixed Trump
   calling an elite save% "bad": the goalie numbers weren't in front of him.
-- Speed: both EA lookups and the read + voice script run concurrently; the
-  card posts as soon as it's drawn and the clip follows as a reply.
+- Speed: both EA lookups and the read + voice clip run concurrently, but card
+  and clip go out as ONE message (Matt: "it cannot show separate"). Don't
+  split them into a card-then-reply again.
 
 ### Cards everywhere
 - Percentiles print as plain numbers ("99", not "99th") on every card:
