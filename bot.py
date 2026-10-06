@@ -942,15 +942,17 @@ def _lead_with_winner(script: str, winner: str, loser: str) -> str:
 ])
 async def pubcompare(interaction: discord.Interaction, player1: str, player2: str,
                      voice: app_commands.Choice[str] = None):
-    """Two players, one card, a written verdict; a voice choice adds a clip."""
+    """Two players, one card, a written verdict; a voice choice adds a clip.
+
+    Built for speed: both EA lookups run at once, the card's read and the
+    voice script are written at the same time, and the card goes out the
+    moment it's drawn -- the clip follows as a reply when the audio is done,
+    rather than holding the card hostage to the slowest step."""
     await interaction.response.defer()
-    ma, err = await find_scout_target(interaction, player1)
-    if not ma:
-        await interaction.followup.send(err)
-        return
-    mb, err = await find_scout_target(interaction, player2)
-    if not mb:
-        await interaction.followup.send(err)
+    (ma, err_a), (mb, err_b) = await asyncio.gather(
+        find_scout_target(interaction, player1), find_scout_target(interaction, player2))
+    if not ma or not mb:
+        await interaction.followup.send(err_a or err_b)
         return
     if _norm(str(ma.get("name"))) == _norm(str(mb.get("name"))):
         await interaction.followup.send(f"That's **{ma.get('name')}** twice -- give me two different players.")
@@ -959,9 +961,12 @@ async def pubcompare(interaction: discord.Interaction, player1: str, player2: st
     c = card.compare_data(ma, mb)
     win, lose = c["winner"]["name"], c["loser"]["name"]
     block = card.format_compare(c)
-    for s in (c["a"], c["b"]):
-        pb, _ = await scout_block(s["m"])
+    for s, (pb, _) in zip((c["a"], c["b"]),
+                          await asyncio.gather(scout_block(c["a"]["m"]), scout_block(c["b"]["m"]))):
         block += f"\n\n===== PLAYER BLOCK: {s['name']} =====\n{pb}"
+
+    clip_task = (asyncio.create_task(_compare_clip(voice.value, block, win, lose))
+                 if voice else None)
 
     read = None
     try:
@@ -977,14 +982,36 @@ async def pubcompare(interaction: discord.Interaction, player1: str, player2: st
     try:
         png = await asyncio.to_thread(card.render_compare, c, read)
     except Exception as e:
+        if clip_task:
+            clip_task.cancel()
         await interaction.followup.send(f"Card render shit the bed: `{type(e).__name__}: {e}`")
         return
     safe = re.sub(r"[^A-Za-z0-9_-]+", "", f"{win}-vs-{lose}")[:60] or "compare"
-    files = [discord.File(io.BytesIO(png), filename=f"{CLIP_BRAND}-pubcompare-{safe}.png")]
-    voice_error = None
+    msg = await interaction.followup.send(
+        file=discord.File(io.BytesIO(png), filename=f"{CLIP_BRAND}-pubcompare-{safe}.png"), wait=True)
+    if not clip_task:
+        return
 
-    if voice and voice.value == "narrator":
+    audio, voice_error = await clip_task
+    if audio:
+        clip = discord.File(io.BytesIO(audio), filename=f"{CLIP_BRAND}-pubcompare-{voice.value}.mp3")
         try:
+            await msg.reply(file=clip, mention_author=False)
+        except Exception:
+            # A reply can fail where the bot can't read history; a plain
+            # followup on the same interaction always works.
+            await interaction.followup.send(file=discord.File(
+                io.BytesIO(audio), filename=f"{CLIP_BRAND}-pubcompare-{voice.value}.mp3"))
+    else:
+        await interaction.followup.send(
+            f"The **{voice.name}** clip didn't come back: `{voice_error}`"[:2000])
+
+
+async def _compare_clip(voice: str, block: str, win: str, lose: str) -> tuple[bytes | None, str | None]:
+    """Write and voice the head-to-head clip. (audio, error) -- one is set.
+    Runs alongside the card, so a slow or failed clip never delays it."""
+    try:
+        if voice == "narrator":
             with_kid = random.random() < vc.NARRATOR_KID_PROB
             prompt = vc.NARRATOR_SCOUT_PROMPT if with_kid else vc.NARRATOR_SCOUT_SOLO_PROMPT
             prompt = f"{prompt}\n\n{COMPARE_VOICE_RULE}\n\n{vc.narrator_length_rule(with_kid)}"
@@ -1005,48 +1032,33 @@ async def pubcompare(interaction: discord.Interaction, player1: str, player2: st
                     raw = f"NARRATOR: {turns[0][1]}" if turns else raw
             script = _lead_with_winner(raw, win, lose)
             audio, _ = await vc.speak_narrator(script, max_words=vc.narrator_word_cap(with_kid))
-            spoken_only = " ".join(ln for _, ln in vc.parse_narrator_script(script))
-            log_clip("narrator", spoken_only, audio)
-            files.append(discord.File(io.BytesIO(audio),
-                                      filename=f"{CLIP_BRAND}-pubcompare-narrator.mp3"))
-        except Exception as e:
-            print(f"[pubcompare] voice failed: {type(e).__name__}: {e}")
-            voice_error = f"{type(e).__name__}: {e}"
-    elif voice:
-        prompt_fn, vid_fn, ramped, max_words, keep_er = VOICES[voice.value]
-        try:
-            sys_prompt = f"{prompt_fn()}\n\n{COMPARE_VOICE_RULE}"
-            rule = vc.length_rule(voice.value)
-            if rule:
-                sys_prompt = f"{sys_prompt}\n\n{rule}"
-            resp = await call_llm(
-                messages=[{"role": "system", "content": sys_prompt},
-                          {"role": "user", "content": block}],
-                max_tokens=220, temperature=0.9)
-            script = _lead_with_winner((resp.choices[0].message.content or "").strip(), win, lose)
-            cap = min(max_words, vc.word_cap(voice.value))
-            if ramped:
-                audio, _ = await vc.speak_ramped(
-                    script, vid_fn(), vc.TORTS_SPEED_START, vc.TORTS_SPEED_END,
-                    end_gain=vc.TORTS_GAIN_END, steps=vc.TORTS_RAMP_STEPS,
-                    temp_start=vc.TORTS_TTS_TEMP_START, temp_end=vc.TORTS_TTS_TEMP_END,
-                    max_words=cap)
-            else:
-                audio, _ = await vc.speak(script, voice_id=vid_fn(),
-                                          max_words=cap, keep_er=keep_er)
-            log_clip(voice.value, script, audio, keep_er=keep_er)
-            files.append(discord.File(io.BytesIO(audio),
-                                      filename=f"{CLIP_BRAND}-pubcompare-{voice.value}.mp3"))
-        except Exception as e:
-            print(f"[pubcompare] voice failed: {type(e).__name__}: {e}")
-            voice_error = f"{type(e).__name__}: {e}"
+            log_clip("narrator", " ".join(ln for _, ln in vc.parse_narrator_script(script)), audio)
+            return audio, None
 
-    if voice_error:
-        await interaction.followup.send(
-            f"Card's below -- the **{voice.name}** clip didn't come back: "
-            f"`{voice_error}`"[:2000], files=files)
-    else:
-        await interaction.followup.send(files=files)
+        prompt_fn, vid_fn, ramped, max_words, keep_er = VOICES[voice]
+        sys_prompt = f"{prompt_fn()}\n\n{COMPARE_VOICE_RULE}"
+        rule = vc.length_rule(voice)
+        if rule:
+            sys_prompt = f"{sys_prompt}\n\n{rule}"
+        resp = await call_llm(
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user", "content": block}],
+            max_tokens=220, temperature=0.9)
+        script = _lead_with_winner((resp.choices[0].message.content or "").strip(), win, lose)
+        cap = min(max_words, vc.word_cap(voice))
+        if ramped:
+            audio, _ = await vc.speak_ramped(
+                script, vid_fn(), vc.TORTS_SPEED_START, vc.TORTS_SPEED_END,
+                end_gain=vc.TORTS_GAIN_END, steps=vc.TORTS_RAMP_STEPS,
+                temp_start=vc.TORTS_TTS_TEMP_START, temp_end=vc.TORTS_TTS_TEMP_END,
+                max_words=cap)
+        else:
+            audio, _ = await vc.speak(script, voice_id=vid_fn(), max_words=cap, keep_er=keep_er)
+        log_clip(voice, script, audio, keep_er=keep_er)
+        return audio, None
+    except Exception as e:
+        print(f"[pubcompare] voice failed: {type(e).__name__}: {e}")
+        return None, f"{type(e).__name__}: {e}"
 
 
 # --------------------------------------------------------------- clubscout
