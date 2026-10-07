@@ -149,12 +149,42 @@ async def match_discord_user(person) -> tuple[float, dict | None]:
                 best_score, best_m = sc, m
     return (best_score, best_m if best_score >= EA_MATCH_MIN else None)
 
+def standout_for(m: dict) -> dict | None:
+    """The one trait a scout should lead with, for whatever he MAINLY plays.
+
+    ea.standout_trait() only knows skater stats, so a goalie with 10+ games
+    out of net got his side-role skating as his "standout" -- the voice was
+    told to focus on it, and enforce_grade_word() then rewrote every praise
+    word above that skating grade ("elite save percentage" -> "very good").
+    A primary goalie now gets his goalie grade instead, in the card's own
+    percentile tier word, so the clip can never disagree with the card.
+    Its trait name isn't in ea.TRAIT_BANDS, so no word gets rewritten."""
+    posns = card._positions(m)
+    if not posns or posns[0][0] != "G":
+        return ea.standout_trait(m)
+    rates = card._rates(m)
+    best = None
+    for key in ("savepct", "gaa"):
+        if key not in rates:
+            continue
+        p = card.percentile("G", key, rates[key])
+        if p is not None and (best is None or abs(p - 50) > abs(best[1] - 50)):
+            best = (key, p)
+    if best is None:
+        return None
+    key, p = best
+    return {"trait": "goaltending", "grade": card.tier(p).lower(),
+            "detail": f"{card.LABELS[key].lower()} {card._fmt(key, rates[key])}, "
+                      f"{p}th percentile among goalies -- he is a GOALIE first; any "
+                      f"skating is a side role"}
+
+
 def _describe(m: dict, name: str) -> str:
     bits = [f"a real EA NHL club player called {name}"]
     pos = ea.pos_line(m)
     if pos and pos != "no position data":
         bits.append(f"games by position: {pos} (most-played is his real position)")
-    trait = ea.standout_trait(m)
+    trait = standout_for(m)
     if trait:
         bits.append(f"his one standout trait is {trait['trait']} ({trait['grade']})")
     return (
@@ -710,7 +740,7 @@ async def scout_block(m: dict) -> tuple[str, dict | None]:
     the card's percentiles, recent form and the standout trait. /pubcompare
     hands each voice one of these per player, so a head-to-head clip knows
     exactly what that voice's solo report would."""
-    standout = ea.standout_trait(m)
+    standout = standout_for(m)
     primary = (card._positions(m) or [("?", 0)])[0][0]
     rates = card._rates(m)
     pcts = []

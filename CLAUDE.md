@@ -76,3 +76,19 @@ client -- patch `discord.Client.run` to a no-op to import it in a test.
   `/beef` (two voices argue a compare), `/tierlist` (up to 8 gamertags into
   S..bender tiers), `/roast`, `/draft`, `/whoami` archetype card.
   Recommended first: `/beef` and `/tierlist`.
+
+## Fix: 2026-10-07 -- voices trashing good goalies
+- Trump (any voice) hated on Benzymcnasty, an ELITE goalie. Cause was data,
+  not the prompt: `ea.standout_trait()` only knows skater stats, so a primary
+  goalie with 10+ skater games got his side-role skating as "STANDOUT TRAIT to
+  focus on" (Benzy: +/- "negative"), and `ea.enforce_grade_word()` then
+  rewrote praise words in the script down to that grade ("a strong GAA" ->
+  "a negative GAA").
+- Fix: `bot.standout_for(m)` -- primary goalies get a "goaltending" trait in
+  the card's percentile tier word; skaters still use `ea.standout_trait`.
+  Used by `/pubscout`, `/pubcompare` (via `scout_block`) and @mention notes.
+  "goaltending" isn't in `ea.TRAIT_BANDS`, so nothing is rewritten.
+- Known leftover: `ea`'s absolute skater bands (SKATER_PPG_BANDS etc.) still
+  drive the skater standout grade and can disagree with the card's
+  percentile tiers. Worth moving skaters onto percentiles too.
+
