@@ -913,28 +913,30 @@ one. Never comment on passing, positioning, hockey IQ, chemistry or attitude
 
 # Appended to each voice's own /pubscout prompt: the character and every
 # rule of his normal scouting report stay; only the shape of the job changes.
-COMPARE_VOICE_RULE = """THIS CLIP IS A HEAD-TO-HEAD: TWO PLAYERS, NOT ONE.
-Everything above still applies, to EACH player, exactly as in your normal
-scouting report -- same voice, same length, same accuracy rules, same number
-rules, cover each man's positions, use each man's STANDOUT TRAIT. You get one
-full player block per man below, the same block your solo report would get.
-What changes:
+COMPARE_VOICE_RULE = """THIS CLIP IS A HEAD-TO-HEAD: TWO PLAYERS, ONE ARGUMENT.
+Keep your voice, your character and every accuracy rule above. But this is
+NOT two scouting reports read back to back. It is a COMPARISON -- you are
+settling an argument between two guys. These rules OVERRIDE the report rules
+above (numbers, positions, standout trait):
 
 - YOUR VERY FIRST SENTENCE SAYS WHO IS BETTER, by gamertag, matching the
-  VERDICT. The answer first, in your character's voice -- no warm-up before
-  it. Never flip it, never call it even.
-- Then each man in turn, the way your normal report would do him, but
-  shorter -- the room is split two ways. ONE number per man, max.
-- "Better" means better AT HIS OWN JOB. If one is a GOALIE, talk about him
-  as a goalie with his goalie grades; never grade a goalie on scoring or a
-  skater on save percentage. If they play different positions, say so.
-- Each man's grades are in HIS block. Never put one man's grade on the
-  other. Use the exact grade word given -- an elite save percentage is
-  elite, never "bad". If you're unsure of a grade, skip it.
-- TOTALS ARE MOSTLY GAMES PLAYED. Never argue from a raw total -- "more
-  shutouts", "more goals", "more points" -- when the two have different
-  game counts. Compare grades and per-game rates only.
-- Land the verdict again at the end."""
+  VERDICT. The answer first, in character. Never flip it, never call it even.
+- Then talk in MATCHUPS, not stat lines: who wins each battle and by how
+  much, in plain hockey words. "He finishes, the other guy just sets up."
+  "One's a sieve, one's a wall." "He's on the ice when it goes in your net."
+  Pick the two or three gaps that decide it and skip the rest.
+- NO STAT READOUT. Do not recite numbers, rates, percentiles, games played
+  or position breakdowns -- the card already shows all of it. ONE number in
+  the whole clip at most, and only if it really lands. Never say stat labels
+  like a box score ("plus-minus", "PIM", "save percentage", "points per
+  game") -- say what they MEAN instead.
+- "Better" means better AT HIS OWN JOB. If one is a GOALIE, talk about him as
+  a goalie; never grade a goalie on scoring or a skater on stopping pucks.
+- Each man's grades are in HIS block. Never put one man's grade on the other.
+  Use the exact grade word given; if unsure of a grade, skip it.
+- TOTALS ARE MOSTLY GAMES PLAYED. Never call a man better for having more
+  shutouts, goals or points.
+- End by landing the verdict again, in one punchy line."""
 
 
 def _first_sentence(script: str) -> str:
@@ -1060,7 +1062,7 @@ async def _compare_clip(voice: str, block: str, win: str, lose: str) -> tuple[by
                 elif with_kid:
                     turns = vc.parse_narrator_script(raw)
                     raw = f"NARRATOR: {turns[0][1]}" if turns else raw
-            script = _lead_with_winner(raw, win, lose)
+            script = clubmod.speakable(_lead_with_winner(raw, win, lose))
             audio, _ = await vc.speak_narrator(script, max_words=vc.narrator_word_cap(with_kid))
             log_clip("narrator", " ".join(ln for _, ln in vc.parse_narrator_script(script)), audio)
             return audio, None
@@ -1074,7 +1076,7 @@ async def _compare_clip(voice: str, block: str, win: str, lose: str) -> tuple[by
             messages=[{"role": "system", "content": sys_prompt},
                       {"role": "user", "content": block}],
             max_tokens=220, temperature=0.9)
-        script = _lead_with_winner((resp.choices[0].message.content or "").strip(), win, lose)
+        script = clubmod.speakable(_lead_with_winner((resp.choices[0].message.content or "").strip(), win, lose))
         cap = min(max_words, vc.word_cap(voice))
         if ramped:
             audio, _ = await vc.speak_ramped(

@@ -92,3 +92,11 @@ client -- patch `discord.Client.run` to a no-op to import it in a test.
   drive the skater standout grade and can disagree with the card's
   percentile tiers. Worth moving skaters onto percentiles too.
 
+## Change: 2026-10-07 -- compare clips argue, they don't recite
+- Matt: the /pubcompare narration kept spelling out "plus slash minus" and
+  every stat. `COMPARE_VOICE_RULE` now OVERRIDES the solo-report rules:
+  winner first, then 2-3 deciding MATCHUPS in plain hockey words, no stat
+  readout (max one number), no box-score labels, verdict again at the end.
+- Compare scripts pass through `club.speakable()` before TTS ("+/-" and
+  "plus/minus" -> "plus minus", SV%/GAA/P-GP spelled out).
+
