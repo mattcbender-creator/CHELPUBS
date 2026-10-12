@@ -112,3 +112,11 @@ client -- patch `discord.Client.run` to a no-op to import it in a test.
   the error in the message text. `_club_voice_file` returns bytes now, not
   a `discord.File` -- files get rebuilt per send attempt.
 - Rule (both commands): never split card and clip into a card-then-reply.
+
+## Change: 2026-10-12 -- Trump stops reading the stat sheet
+- Matt: Trump "says every single number" in clips. `TRUMP_NUMBERS_RULE` in
+  `bot.py`: at most two numbers per clip, said like a person ("almost a
+  point a game"), no decimals, no percentiles-as-numbers, no stat labels, no
+  position-by-position walk. Bolted on via `bot.voice_rules(voice)` (length
+  rule + Trump rule) for `/pubscout`, `/pubcompare`, `/clubscout`.
+  `TRUMP_SCOUT_PROMPT` / `voice.py` / `/ask-trump` untouched, per rule 2.

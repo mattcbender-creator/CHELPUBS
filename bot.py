@@ -734,6 +734,31 @@ VOICES = {
     "gilbert": (lambda: vc.GILBERT_SCOUT_PROMPT, lambda: vc.GILBERT_VOICE_ID, False, vc.GILBERT_SCOUT_MAX_WORDS, False),
 }
 
+TRUMP_NUMBERS_RULE = """NUMBERS: Trump does not read a stat sheet. He gives VERDICTS, and a
+number only when it's the whole point. Pick AT MOST TWO numbers for the
+entire clip -- the one or two that make the case -- and skip every other
+stat in front of you. The card has all of them already. When you do say
+one, say it the way a guy at a bar would, not like a box score: "almost a
+point a game", "wins more than he loses", "stops just about everything" --
+never decimals, never "point nine three", never a percentile as "ninety-
+fourth percentile" (say "top of the league", "near the top", "the bottom").
+Never say a stat label like "plus-minus", "PIM", "save percentage" or
+"points per game" -- say what it MEANS. Never walk down the stat list
+position by position. Any number you do say still has to come from the
+data in front of you; rounding it off is fine, inventing one is not."""
+
+
+def voice_rules(voice: str) -> str:
+    """Rules bolted onto a voice's scout prompt per call (length, and for
+    Trump the numbers rule). Lives here so TRUMP_SCOUT_PROMPT itself stays
+    untouched, per HANDOFF; Trump gets the rule on every scout-style clip
+    (/pubscout, /pubcompare, /clubscout), not on /ask-trump."""
+    parts = [vc.length_rule(voice)]
+    if voice == "trump":
+        parts.append(TRUMP_NUMBERS_RULE)
+    return "\n\n".join(p for p in parts if p)
+
+
 
 async def scout_block(m: dict) -> tuple[str, dict | None]:
     """Everything the model gets about one player on /pubscout: raw stats,
@@ -845,7 +870,7 @@ async def pubscout(interaction: discord.Interaction, gamertag: str,
         prompt_fn, vid_fn, ramped, max_words, keep_er = VOICES[voice.value]
         try:
             sys_prompt = prompt_fn()
-            rule = vc.length_rule(voice.value)
+            rule = voice_rules(voice.value)
             if rule:
                 sys_prompt = f"{sys_prompt}\n\n{rule}"
             resp = await call_llm(
@@ -1069,7 +1094,7 @@ async def _compare_clip(voice: str, block: str, win: str, lose: str) -> tuple[by
 
         prompt_fn, vid_fn, ramped, max_words, keep_er = VOICES[voice]
         sys_prompt = f"{prompt_fn()}\n\n{COMPARE_VOICE_RULE}"
-        rule = vc.length_rule(voice)
+        rule = voice_rules(voice)
         if rule:
             sys_prompt = f"{sys_prompt}\n\n{rule}"
         resp = await call_llm(
@@ -1169,7 +1194,7 @@ async def _club_voice_file(voice, block: str) -> tuple[bytes | None, str | None]
             return audio, None
         prompt_fn, vid_fn, ramped, max_words, keep_er = VOICES[voice.value]
         sys_prompt = f"{prompt_fn()}\n\n{team_note}"
-        rule = vc.length_rule(voice.value)
+        rule = voice_rules(voice.value)
         if rule:
             sys_prompt = f"{sys_prompt}\n\n{rule}"
         resp = await call_llm(messages=[{"role": "system", "content": sys_prompt},
