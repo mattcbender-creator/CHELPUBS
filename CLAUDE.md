@@ -100,3 +100,12 @@ client -- patch `discord.Client.run` to a no-op to import it in a test.
 - Compare scripts pass through `club.speakable()` before TTS ("+/-" and
   "plus/minus" -> "plus minus", SV%/GAA/P-GP spelled out).
 
+
+## Change: 2026-10-12 -- clubscout card and clip in one message
+- Matt: the `/clubscout` audio has to land WITH the card, not after it.
+  `/clubscout` now does what `/pubcompare` does: the voice task starts as
+  soon as the club block exists, the read and render run alongside it, and
+  card + clip go out as ONE `followup.send(files=[...])`. No "clip on the
+  way" placeholder, no second message, no `msg.edit`. If the clip fails the
+  card still goes out, with the error in the message text.
+- Rule (both commands): never split card and clip into a card-then-reply.

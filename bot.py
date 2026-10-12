@@ -1204,9 +1204,10 @@ async def _club_voice_file(voice, block: str) -> tuple[discord.File | None, str 
 ])
 async def clubscout(interaction: discord.Interaction, club: str,
                     voice: app_commands.Choice[str] = None):
-    """The card is the report; a voice choice adds a clip alongside it. The
-    card goes out as soon as it renders and the clip follows, so nobody
-    waits a minute for a picture that was ready in five seconds."""
+    """The card is the report; a voice choice adds a clip alongside it. Card
+    and clip go out as ONE message (Matt: they can't show up separately), so
+    the clip starts rendering the moment the block exists and the card waits
+    for whatever audio is still cooking -- same shape as /pubcompare."""
     await interaction.response.defer()
     q = clubmod.clean_name(club)
     try:
@@ -1264,24 +1265,21 @@ async def clubscout(interaction: discord.Interaction, club: str,
             voice_task.cancel()
         return
     safe = re.sub(r"[^A-Za-z0-9_-]+", "_", s["name"]).strip("_") or "club"
-    note = f"🎙️ {voice.name} clip on the way, about half a minute." if voice else None
-    msg = await interaction.followup.send(
-        content=note, file=discord.File(io.BytesIO(png), filename=f"{CLIP_BRAND}-clubscout-{safe}.png"),
-        wait=True)
-
-    if voice_task:
-        f, err = await voice_task
-        if f:
-            await interaction.followup.send(file=f)
-            try:
-                await msg.edit(content=None)
-            except Exception:
-                pass
-        else:
-            try:
-                await msg.edit(content=f"The **{voice.name}** clip didn't come back: `{err}`"[:2000])
-            except Exception:
-                await interaction.followup.send(f"The **{voice.name}** clip didn't come back: `{err}`"[:2000])
+    files = [discord.File(io.BytesIO(png), filename=f"{CLIP_BRAND}-clubscout-{safe}.png")]
+    # One message, card and clip together -- the clip was written alongside
+    # the card's read and render, so this only waits for whatever audio is
+    # still rendering. Never split them into a card-then-reply again.
+    if not voice_task:
+        await interaction.followup.send(files=files)
+        return
+    f, err = await voice_task
+    if f:
+        files.append(f)
+        await interaction.followup.send(files=files)
+    else:
+        await interaction.followup.send(
+            f"Card's below -- the **{voice.name}** clip didn't come back: `{err}`"[:2000],
+            files=files)
 
 
 # ----------------------------------------------------------------- matchup
