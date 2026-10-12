@@ -105,7 +105,10 @@ client -- patch `discord.Client.run` to a no-op to import it in a test.
 - Matt: the `/clubscout` audio has to land WITH the card, not after it.
   `/clubscout` now does what `/pubcompare` does: the voice task starts as
   soon as the club block exists, the read and render run alongside it, and
-  card + clip go out as ONE `followup.send(files=[...])`. No "clip on the
-  way" placeholder, no second message, no `msg.edit`. If the clip fails the
-  card still goes out, with the error in the message text.
+  card + clip go out as ONE message. With a voice picked, a one-line
+  "card and clip on the way" note posts immediately and `_deliver` EDITS
+  that same message into the card + clip when they're ready (fallback: fresh
+  send, delete the note). If the clip fails the card still goes out, with
+  the error in the message text. `_club_voice_file` returns bytes now, not
+  a `discord.File` -- files get rebuilt per send attempt.
 - Rule (both commands): never split card and clip into a card-then-reply.

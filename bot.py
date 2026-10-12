@@ -1134,8 +1134,9 @@ async def club_autocomplete(interaction: discord.Interaction, current: str):
     return out[:25]
 
 
-async def _club_voice_file(voice, block: str) -> tuple[discord.File | None, str | None]:
-    """A clip reading the club block in the chosen voice, or (None, error).
+async def _club_voice_file(voice, block: str) -> tuple[bytes | None, str | None]:
+    """A clip reading the club block in the chosen voice: (audio, error),
+    one of them set.
     Same voices and length rules as /pubscout; the prompts get told it's a
     team, not a player, since the scout prompts were written for one guy."""
     team_note = ("This report is about a CLUB (a whole team and its roster), not one player. "
@@ -1165,7 +1166,7 @@ async def _club_voice_file(voice, block: str) -> tuple[discord.File | None, str 
             raw = clubmod.speakable(raw)
             audio, _ = await vc.speak_narrator(raw, max_words=vc.narrator_word_cap(with_kid))
             log_clip("narrator", " ".join(ln for _, ln in vc.parse_narrator_script(raw)), audio)
-            return discord.File(io.BytesIO(audio), filename=f"{CLIP_BRAND}-clubscout-narrator.mp3"), None
+            return audio, None
         prompt_fn, vid_fn, ramped, max_words, keep_er = VOICES[voice.value]
         sys_prompt = f"{prompt_fn()}\n\n{team_note}"
         rule = vc.length_rule(voice.value)
@@ -1184,7 +1185,7 @@ async def _club_voice_file(voice, block: str) -> tuple[discord.File | None, str 
         else:
             audio, _ = await vc.speak(script, voice_id=vid_fn(), max_words=cap, keep_er=keep_er)
         log_clip(voice.value, script, audio, keep_er=keep_er)
-        return discord.File(io.BytesIO(audio), filename=f"{CLIP_BRAND}-clubscout-{voice.value}.mp3"), None
+        return audio, None
     except Exception as e:
         print(f"[clubscout] voice failed: {type(e).__name__}: {e}")
         return None, f"{type(e).__name__}: {e}"
@@ -1244,9 +1245,19 @@ async def clubscout(interaction: discord.Interaction, club: str,
         block += form
 
     # The clip is the slow part (a model call, then 20-40s of TTS), so it
-    # starts NOW, alongside the card's own read and render, instead of after
-    # the card has gone out. The card still goes out the moment it's ready.
+    # starts NOW, alongside the card's own read and render. The card is held
+    # until the clip is done so they land together; meanwhile the channel
+    # gets a one-line heads-up that both are coming (Matt's ask), which the
+    # finished card + clip then replace in place.
     voice_task = asyncio.create_task(_club_voice_file(voice, block)) if voice else None
+    placeholder = None
+    if voice_task:
+        try:
+            placeholder = await interaction.followup.send(
+                f"🎙️ **{s['name']}** card and {voice.name} clip on the way, about half a minute.",
+                wait=True)
+        except Exception as e:
+            print(f"[clubscout] placeholder failed: {type(e).__name__}: {e}")
 
     read = None
     try:
@@ -1260,26 +1271,49 @@ async def clubscout(interaction: discord.Interaction, club: str,
     try:
         png = await asyncio.to_thread(card.render_club, s, read)
     except Exception as e:
-        await interaction.followup.send(f"Card render shit the bed: `{type(e).__name__}: {e}`")
         if voice_task:
             voice_task.cancel()
+        await _deliver(interaction, placeholder, f"Card render shit the bed: `{type(e).__name__}: {e}`", [])
         return
     safe = re.sub(r"[^A-Za-z0-9_-]+", "_", s["name"]).strip("_") or "club"
-    files = [discord.File(io.BytesIO(png), filename=f"{CLIP_BRAND}-clubscout-{safe}.png")]
+    blobs = [(png, f"{CLIP_BRAND}-clubscout-{safe}.png")]
     # One message, card and clip together -- the clip was written alongside
     # the card's read and render, so this only waits for whatever audio is
     # still rendering. Never split them into a card-then-reply again.
     if not voice_task:
-        await interaction.followup.send(files=files)
+        await _deliver(interaction, None, None, blobs)
         return
-    f, err = await voice_task
-    if f:
-        files.append(f)
-        await interaction.followup.send(files=files)
+    audio, err = await voice_task
+    if audio:
+        blobs.append((audio, f"{CLIP_BRAND}-clubscout-{voice.value}.mp3"))
+        await _deliver(interaction, placeholder, None, blobs)
     else:
-        await interaction.followup.send(
-            f"Card's below -- the **{voice.name}** clip didn't come back: `{err}`"[:2000],
-            files=files)
+        await _deliver(interaction, placeholder,
+                       f"Card's below -- the **{voice.name}** clip didn't come back: `{err}`"[:2000], blobs)
+
+
+async def _deliver(interaction: discord.Interaction, placeholder, content: str | None,
+                   blobs: list[tuple[bytes, str]]):
+    """Put content + attachments into the channel as ONE message. If there's
+    a placeholder ("on the way...") it becomes that message in place, so the
+    channel never shows a stale note next to the result. If the edit fails
+    for any reason, fall back to a fresh message and clear the placeholder.
+    Files are rebuilt from bytes per attempt: discord.py closes them after
+    a send, so one File object can't be reused for the retry."""
+    def files():
+        return [discord.File(io.BytesIO(b), filename=n) for b, n in blobs]
+    if placeholder is not None:
+        try:
+            await placeholder.edit(content=content, attachments=files())
+            return
+        except Exception as e:
+            print(f"[clubscout] placeholder edit failed: {type(e).__name__}: {e}")
+    await interaction.followup.send(content=content, files=files())
+    if placeholder is not None:
+        try:
+            await placeholder.delete()
+        except Exception:
+            pass
 
 
 # ----------------------------------------------------------------- matchup
