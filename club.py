@@ -151,7 +151,9 @@ def summarize(club: dict, detail: dict) -> dict:
 def format_block(s: dict) -> str:
     """The club, flattened for the model. Raw facts only; the model's job is
     to say what they mean, not to recompute them."""
-    lines = [f"Club: {s['name']}  (platform {s['platform']}, division {s['division'] or 'unknown'})"]
+    spoken = spoken_name(s['name'])
+    say = f' -- say the name "{spoken}"' if spoken.lower() != s['name'].lower() else ""
+    lines = [f"Club: {s['name']}{say}  (platform {s['platform']}, division {s['division'] or 'unknown'})"]
     if s["w"] is not None:
         # Written out, not "50-4-1": a text-to-speech voice reads dashed
         # numbers as a date, and the model tends to echo whatever form it sees.
@@ -279,6 +281,27 @@ _SLASHY = [(re.compile(r"\bplus\s*/\s*minus\b", re.I), "plus minus"),
            (re.compile(r"\bSV\s*%"), "save percentage"),
            (re.compile(r"\bGAA\b"), "goals against average"),
            (re.compile(r"\bGP\b"), "games played")]
+
+
+def spoken_name(name: str) -> str:
+    """How a voice should SAY a club name. EA names are tags, not words:
+    "6GANG7" gets spelled letter by letter by TTS. Split digits from
+    letters ("6 GANG 7"), turn all-caps words of three or more letters into
+    words ("Gang"; "LA" stays), and flatten _ . - to spaces. Returns the
+    name unchanged when none of that applies."""
+    n = re.sub(r"[_.]+", " ", str(name or ""))
+    n = re.sub(r"(?<=\d)(?=[A-Za-z])|(?<=[A-Za-z])(?=\d)", " ", n)
+    n = re.sub(r"\b[A-Z]{3,}\b", lambda m: m[0].capitalize(), n)
+    return re.sub(r"\s+", " ", n).strip()
+
+
+def say_name(text: str, name: str) -> str:
+    """Swap every mention of the raw club name in a script for the spoken
+    form, so the voice reads "6 Gang 7" even if the model copied the tag."""
+    spoken = spoken_name(name)
+    if not name or spoken.lower() == str(name).lower():
+        return text
+    return re.sub(re.escape(str(name)), spoken, text, flags=re.I)
 
 
 def speakable(text: str) -> str:

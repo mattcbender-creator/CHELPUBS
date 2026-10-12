@@ -1124,7 +1124,8 @@ card -- two or three sentences saying what kind of team this is and whether
 you'd want to play them. The card shows the record, goals and the roster
 right under you, so don't read numbers back; say what they MEAN.
 
-40-55 words, no markdown, no bullets. Blunt, readable, not a bit.
+35-50 words, three sentences at most, no markdown, no bullets. Blunt,
+readable, not a bit. Finish the last sentence -- never trail off.
 
 EASHL is 6v6 club hockey with NO lines and NO line changes: every player
 is one human at one position for the whole game. Never say "top line",
@@ -1159,7 +1160,16 @@ async def club_autocomplete(interaction: discord.Interaction, current: str):
     return out[:25]
 
 
-async def _club_voice_file(voice, block: str) -> tuple[bytes | None, str | None]:
+TRUMP_CLUB_FLAVOR = """THIS ONE'S A CLUB, SO HAVE SOME FUN WITH IT. Hang a nickname on the
+club once, the way he brands an opponent ("Low-Energy Six Gang", "the
+so-called champions"), and give one or two roster guys a nickname off
+what they actually do out there ("this Lambo guy, Plus-Five-Hundred Lambo,
+tremendous"). Two or three nicknames in the whole clip, no more -- it's
+still a scouting report with a verdict, not a stand-up set. Everything else
+about the numbers rules still holds."""
+
+
+async def _club_voice_file(voice, block: str, name: str = "") -> tuple[bytes | None, str | None]:
     """A clip reading the club block in the chosen voice: (audio, error),
     one of them set.
     Same voices and length rules as /pubscout; the prompts get told it's a
@@ -1188,7 +1198,7 @@ async def _club_voice_file(voice, block: str) -> tuple[bytes | None, str | None]
                 elif with_kid:
                     turns = vc.parse_narrator_script(raw)
                     raw = f"NARRATOR: {turns[0][1]}" if turns else raw
-            raw = clubmod.speakable(raw)
+            raw = clubmod.speakable(clubmod.say_name(raw, name))
             audio, _ = await vc.speak_narrator(raw, max_words=vc.narrator_word_cap(with_kid))
             log_clip("narrator", " ".join(ln for _, ln in vc.parse_narrator_script(raw)), audio)
             return audio, None
@@ -1197,10 +1207,13 @@ async def _club_voice_file(voice, block: str) -> tuple[bytes | None, str | None]
         rule = voice_rules(voice.value)
         if rule:
             sys_prompt = f"{sys_prompt}\n\n{rule}"
+        if voice.value == "trump":
+            sys_prompt = f"{sys_prompt}\n\n{TRUMP_CLUB_FLAVOR}"
         resp = await call_llm(messages=[{"role": "system", "content": sys_prompt},
                                         {"role": "user", "content": block}],
                               max_tokens=220, temperature=0.9)
-        script = clubmod.speakable((resp.choices[0].message.content or "").strip())
+        script = clubmod.speakable(clubmod.say_name(
+            (resp.choices[0].message.content or "").strip(), name))
         cap = min(max_words, vc.word_cap(voice.value))
         if ramped:
             audio, _ = await vc.speak_ramped(
@@ -1274,7 +1287,7 @@ async def clubscout(interaction: discord.Interaction, club: str,
     # until the clip is done so they land together; meanwhile the channel
     # gets a one-line heads-up that both are coming (Matt's ask), which the
     # finished card + clip then replace in place.
-    voice_task = asyncio.create_task(_club_voice_file(voice, block)) if voice else None
+    voice_task = asyncio.create_task(_club_voice_file(voice, block, s["name"])) if voice else None
     placeholder = None
     if voice_task:
         try:

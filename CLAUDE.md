@@ -120,3 +120,17 @@ client -- patch `discord.Client.run` to a no-op to import it in a test.
   position-by-position walk. Bolted on via `bot.voice_rules(voice)` (length
   rule + Trump rule) for `/pubscout`, `/pubcompare`, `/clubscout`.
   `TRUMP_SCOUT_PROMPT` / `voice.py` / `/ask-trump` untouched, per rule 2.
+
+## Fix: 2026-10-12 -- club card read cut off, "6GANG7" spelled out
+- Card: `_wrap(max_lines=4)` was silently dropping the end of the club read
+  (6GANG7's ended "a track meet with"). `card._fit_read` now steps the font
+  27 -> 25 -> 23 with 4 -> 5 -> 6 lines until the whole read fits, and if it
+  still doesn't, cuts at the last COMPLETE sentence. `CLUB_READ_PROMPT` is
+  35-50 words, three sentences max.
+- Voice: TTS spelled "6GANG7" letter by letter. `club.spoken_name()` splits
+  digits from letters and lowercases all-caps words ("6 Gang 7", "Wildman
+  Hockey"); `format_block` tells the model `say the name "6 Gang 7"`, and
+  `club.say_name()` swaps the raw tag out of the script before TTS.
+- Trump on `/clubscout` only: `TRUMP_CLUB_FLAVOR` -- one nickname for the
+  club, one or two for roster guys, max three per clip. Not on /pubscout or
+  /pubcompare. Trump prompt constants still untouched.

@@ -1,3 +1,4 @@
+import re
 """ChelScout minicard -- a branded PNG scouting card, drawn with Pillow.
 
 No browser, no headless Chrome: everything here is rectangles, bars and text,
@@ -693,6 +694,32 @@ def _wrap(d, text: str, font, maxw: int, max_lines: int = 3) -> list[str]:
     return lines[:max_lines]
 
 
+def _fit_read(d, text: str, maxw: int, sizes=(27, 25, 23), max_lines=(4, 5, 6)):
+    """The read at the biggest size it fits whole, stepping the font down
+    and the line budget up before giving up. If it still won't fit, cut at
+    the last full sentence inside the budget rather than mid-thought
+    (6GANG7's card ended on "a track meet with"). Returns (font, lines)."""
+    font = _font("medium", sizes[-1])
+    lines: list[str] = []
+    for size, n in zip(sizes, max_lines):
+        font = _font("medium", size)
+        lines = _wrap(d, text, font, maxw, max_lines=99)
+        if len(lines) <= n:
+            return font, lines
+    # smallest size, still too long: keep whole sentences that fit
+    budget = max_lines[-1]
+    kept = " ".join(lines[:budget])
+    # the regex keeps only COMPLETE sentences, so a half-sentence tail
+    # (the one cut by the line budget) drops out on its own
+    sentences = re.findall(r"[^.!?]+[.!?]+", kept)
+    if sentences:
+        whole = " ".join(x.strip() for x in sentences)
+        fit = _wrap(d, whole, font, maxw, max_lines=99)
+        if len(fit) <= budget:
+            return font, fit
+    return font, lines[:budget]
+
+
 def render_club(s: dict, read: str | None = None) -> bytes:
     """The club card: record and goals up top, the roster-shape radar and
     recent form side by side, the roster underneath. Every block is optional
@@ -713,7 +740,10 @@ def render_club(s: dict, read: str | None = None) -> bytes:
     f_foot = _font("bold", 17)
 
     tmp = ImageDraw.Draw(Image.new("RGB", (10, 10)))
-    read_lines = _wrap(tmp, read, f_read, W - 2 * PAD - 8, max_lines=4) if read else []
+    if read:
+        f_read, read_lines = _fit_read(tmp, read, W - 2 * PAD - 8)
+    else:
+        read_lines = []
 
     tiles = []
     if s.get("gf") is not None and s.get("ga") is not None:
