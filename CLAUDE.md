@@ -134,3 +134,12 @@ client -- patch `discord.Client.run` to a no-op to import it in a test.
 - Trump on `/clubscout` only: `TRUMP_CLUB_FLAVOR` -- one nickname for the
   club, one or two for roster guys, max three per clip. Not on /pubscout or
   /pubcompare. Trump prompt constants still untouched.
+
+## Incident: 2026-10-21 -- Railway env-var breach, OpenRouter keys revoked
+- Railway disclosed unauthorized access to customer environment variables.
+  OpenRouter disabled Matt's keys (ASKBOTS-PUBS, GM ASK, golf) on 10-22.
+- New `OPENROUTER_API_KEY` set in Railway 10-22. Still to rotate once Railway
+  deploys are healthy: `DISCORD_BOT_TOKEN` (Dev Portal -> Bot -> Reset
+  Token, paste into Railway immediately), `FISH_API_KEY`,
+  `FISH_TRUMP_API_KEY`. Voice/model IDs and tuning vars are not secrets.
+- No secrets live in this repo (no `.env`; everything is read from env).
