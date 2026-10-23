@@ -160,8 +160,10 @@ def standout_for(m: dict) -> dict | None:
     percentile tier word, so the clip can never disagree with the card.
     Its trait name isn't in ea.TRAIT_BANDS, so no word gets rewritten."""
     posns = card._positions(m)
-    if not posns or posns[0][0] != "G":
-        return ea.standout_trait(m)
+    if not posns:
+        return None
+    if posns[0][0] != "G":
+        return _skater_standout(m, posns[0][0])
     rates = card._rates(m)
     best = None
     for key in ("savepct", "gaa"):
@@ -177,6 +179,40 @@ def standout_for(m: dict) -> dict | None:
             "detail": f"{card.LABELS[key].lower()} {card._fmt(key, rates[key])}, "
                       f"{p}th percentile among goalies -- he is a GOALIE first; any "
                       f"skating is a side role"}
+
+
+# What each card skill actually measures, in words the model can't misread.
+# "Scoring" on the card is GOALS per game only; assists are playmaking.
+SKILL_MEANS = {
+    "scoring": "goals per game",
+    "playmaking": "assists per game",
+    "impact": "plus/minus per game",
+    "physicality": "hits per game",
+    "discipline": "penalty minutes per game, fewer is better",
+    "savepct": "save percentage",
+    "gaa": "goals against average, lower is better",
+    "shutouts": "shutouts per game",
+}
+
+
+def _skater_standout(m: dict, primary: str) -> dict | None:
+    """A skater's standout trait off the CARD's percentiles, not ea's fixed
+    bands. The old bands called 1.4 points a game "very good production" for
+    anybody, so a D with 114 assists and 23 goals (BAD scoring among D) went
+    to the voice as a "very good" producer and Trump called him a scorer.
+    Same rule as the goalie branch: most extreme skill on the card's radar,
+    graded in the card's tier word. The trait name isn't in ea.TRAIT_BANDS,
+    so enforce_grade_word leaves the script alone."""
+    gp = ea._num(m.get("gamesplayed"))
+    if max(gp - ea._num(m.get("glgp")), 0) < ea.MIN_GAMES:
+        return None
+    axes = card.radar_axes(primary, card._rates(m), False)
+    if not axes:
+        return None
+    label, key, p = max(axes, key=lambda a: abs(a[2] - 50))
+    rate = card._rates(m)[key]
+    return {"trait": label.lower(), "grade": card.tier(p).lower(),
+            "detail": f"{SKILL_MEANS[key]} {rate:.2f}, {p}th percentile among {primary}"}
 
 
 def _describe(m: dict, name: str) -> str:
@@ -768,16 +804,20 @@ async def scout_block(m: dict) -> tuple[str, dict | None]:
     standout = standout_for(m)
     primary = (card._positions(m) or [("?", 0)])[0][0]
     rates = card._rates(m)
-    pcts = []
-    for key in card.ROWS_BY_POS.get(primary, []):
-        if key in rates:
-            pc = card.percentile(primary, key, rates[key])
-            if pc is not None:
-                pcts.append(f"  {card.LABELS[key]}: {pc}th percentile among {primary} "
-                            f"(his rate {rates[key]:.2f})")
+    # Every skill the card's radar draws, not just the four bar rows: a D's
+    # bars skip SCORING, so his goal rate never reached the model and a pile
+    # of assists got sold as scoring.
+    pcts = [f"  {label} ({SKILL_MEANS[key]}): {card.tier(pc)}, {pc}th percentile among "
+            f"{primary} (his rate {rates[key]:.2f})"
+            for label, key, pc in card.radar_axes(primary, rates, primary == "G")]
     block = ea.format_stats(m)
-    block += (f"\n\nPERCENTILE RANKS vs other {primary} with 50+ games -- these are what "
-              f"the card shows, do not contradict them:\n" + "\n".join(pcts))
+    block += (f"\n\nPERCENTILE RANKS vs other {primary} with 50+ games -- THESE ARE HIS GRADES. "
+              f"They are what the card shows; use these tier words and never contradict them:\n"
+              + "\n".join(pcts))
+    if primary != "G":
+        block += ("\n\nSCORING MEANS GOALS. Assists are playmaking, and points or points per "
+                  "game are NOT a grade. Never call him a scorer, sniper, finisher or "
+                  "producer unless SCORING above is SOLID or better.")
     form = await asyncio.to_thread(scout.player_form_block, str(m.get("name")))
     if form:
         block += form

@@ -88,9 +88,7 @@ client -- patch `discord.Client.run` to a no-op to import it in a test.
   the card's percentile tier word; skaters still use `ea.standout_trait`.
   Used by `/pubscout`, `/pubcompare` (via `scout_block`) and @mention notes.
   "goaltending" isn't in `ea.TRAIT_BANDS`, so nothing is rewritten.
-- Known leftover: `ea`'s absolute skater bands (SKATER_PPG_BANDS etc.) still
-  drive the skater standout grade and can disagree with the card's
-  percentile tiers. Worth moving skaters onto percentiles too.
+- Known leftover: FIXED 2026-10-23, see below.
 
 ## Change: 2026-10-07 -- compare clips argue, they don't recite
 - Matt: the /pubcompare narration kept spelling out "plus slash minus" and
@@ -143,3 +141,19 @@ client -- patch `discord.Client.run` to a no-op to import it in a test.
   Token, paste into Railway immediately), `FISH_API_KEY`,
   `FISH_TRUMP_API_KEY`. Voice/model IDs and tuning vars are not secrets.
 - No secrets live in this repo (no `.env`; everything is read from env).
+
+## Fix: 2026-10-23 -- Trump called a bad-scoring D "a good scorer"
+- SenorOGPotato: D, 23G 114A in 96 GP, card says SCORING BAD. Trump said he
+  scores. Cause was the data again: the skater standout trait still came
+  from `ea`'s absolute bands, where 1.4 P/GP = "production: very good" for
+  anyone, and the block only listed the D's four BAR skills, so his scoring
+  percentile never reached the model at all.
+- Fix (bot.py): `_skater_standout` picks the most extreme skill on the
+  card's radar in the card's tier word (goalies already worked this way).
+  `scout_block` now lists EVERY radar skill with its tier word and what it
+  measures ("SCORING (goals per game): BAD, 24th..."), plus a rule that
+  scoring means goals and points are not a grade. Feeds `/pubscout`,
+  `/pubcompare` and @mention notes.
+- `ea.standout_trait`, `ea.grade_positions` and the absolute bands are now
+  unused by the bot; `enforce_grade_word` no-ops for skaters, as it already
+  did for goalies.

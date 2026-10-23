@@ -667,7 +667,7 @@ def format_stats(m: dict) -> str:
         f"  Plus/minus: {_num(m.get('skplusmin')):+.0f}",
         f"  Hits: {hits:.0f}",
         f"  PIM: {_num(m.get('skpim')):.0f}",
-        "  (Per-game rates are in the PRE-COMPUTED VERDICTS below. Use those, not your own division.)",
+        "  (His grades are the PERCENTILE RANKS below. Do not grade him off these totals.)",
     ]
 
     if glgp > 0:
