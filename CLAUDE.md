@@ -157,3 +157,25 @@ client -- patch `discord.Client.run` to a no-op to import it in a test.
 - `ea.standout_trait`, `ea.grade_positions` and the absolute bands are now
   unused by the bot; `enforce_grade_word` no-ops for skaters, as it already
   did for goalies.
+
+## Fix: 2026-10-25 -- club clips read the card; "Pl0t" said as P-L-zero-T
+- Every voice on `/clubscout` (not just Trump) was reciting "elite, elite,
+  elite, bad". System cause: `club.format_block` ends with "Use the card's
+  words: 90+ elite, 78+ stud..." -- the CARD READ's instruction, and the
+  voices got the same block. The player prompts also say "use the exact
+  grade word", so the model obeyed.
+- Fix, same mechanism that fixed /pubcompare: voices now get
+  `club.voice_block(s)` -- a code-written STORY first (`club.story`: what
+  they are, record in words, form, best skill, weakest skill, how you beat
+  them, goalie, best player, weak link -- all from the card's percentiles,
+  so it can't disagree with the card) and the grades only as "reference,
+  never read out". `CLUB_VOICE_RULE` in bot.py OVERRIDES the player-report
+  rules for every voice: one tier word max, one number max, no percentiles,
+  no skill-by-skill walk. The card read still uses `format_block` as before.
+- Leetspeak names: `club.spoken_name` turns a digit WRAPPED in letters into
+  the letter ("Pl0t" -> "Plot", "Sn1per" -> "Sniper"); edge digits stay
+  numbers ("6GANG7", "PS5"). Applied to club names, roster names in club
+  clips, and now gamertags in /pubscout and /pubcompare clips (block says
+  `SAY HIS NAME "..."`; `club.say_name(s)` swaps the raw tag before TTS).
+- `club.ordinal()`: "22nd", not "22th", everywhere the model sees a
+  percentile (voices were reading "twenty-two-th").

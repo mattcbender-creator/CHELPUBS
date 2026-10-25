@@ -177,7 +177,7 @@ def standout_for(m: dict) -> dict | None:
     key, p = best
     return {"trait": "goaltending", "grade": card.tier(p).lower(),
             "detail": f"{card.LABELS[key].lower()} {card._fmt(key, rates[key])}, "
-                      f"{p}th percentile among goalies -- he is a GOALIE first; any "
+                      f"{clubmod.ordinal(p)} percentile among goalies -- he is a GOALIE first; any "
                       f"skating is a side role"}
 
 
@@ -212,7 +212,7 @@ def _skater_standout(m: dict, primary: str) -> dict | None:
     label, key, p = max(axes, key=lambda a: abs(a[2] - 50))
     rate = card._rates(m)[key]
     return {"trait": label.lower(), "grade": card.tier(p).lower(),
-            "detail": f"{SKILL_MEANS[key]} {rate:.2f}, {p}th percentile among {primary}"}
+            "detail": f"{SKILL_MEANS[key]} {rate:.2f}, {clubmod.ordinal(p)} percentile among {primary}"}
 
 
 def _describe(m: dict, name: str) -> str:
@@ -807,10 +807,13 @@ async def scout_block(m: dict) -> tuple[str, dict | None]:
     # Every skill the card's radar draws, not just the four bar rows: a D's
     # bars skip SCORING, so his goal rate never reached the model and a pile
     # of assists got sold as scoring.
-    pcts = [f"  {label} ({SKILL_MEANS[key]}): {card.tier(pc)}, {pc}th percentile among "
+    pcts = [f"  {label} ({SKILL_MEANS[key]}): {card.tier(pc)}, {clubmod.ordinal(pc)} percentile among "
             f"{primary} (his rate {rates[key]:.2f})"
             for label, key, pc in card.radar_axes(primary, rates, primary == "G")]
     block = ea.format_stats(m)
+    spoken = clubmod.spoken_name(str(m.get("name") or ""))
+    if spoken.lower() != str(m.get("name") or "").lower():
+        block += f"\n\nSAY HIS NAME \"{spoken}\" (that's how {m.get('name')} is pronounced)."
     block += (f"\n\nPERCENTILE RANKS vs other {primary} with 50+ games -- THESE ARE HIS GRADES. "
               f"They are what the card shows; use these tier words and never contradict them:\n"
               + "\n".join(pcts))
@@ -897,7 +900,7 @@ async def pubscout(interaction: discord.Interaction, gamertag: str,
                 elif with_kid:
                     turns = vc.parse_narrator_script(raw)
                     raw = f"NARRATOR: {turns[0][1]}" if turns else raw
-            script = ea.enforce_grade_word(raw, standout)
+            script = clubmod.say_name(ea.enforce_grade_word(raw, standout), str(m.get("name") or ""))
             audio, _ = await vc.speak_narrator(script, max_words=vc.narrator_word_cap(with_kid))
             spoken_only = " ".join(ln for _, ln in vc.parse_narrator_script(script))
             log_clip("narrator", spoken_only, audio)
@@ -917,7 +920,9 @@ async def pubscout(interaction: discord.Interaction, gamertag: str,
                 messages=[{"role": "system", "content": sys_prompt},
                           {"role": "user", "content": block}],
                 max_tokens=220, temperature=0.9)
-            script = ea.enforce_grade_word((resp.choices[0].message.content or "").strip(), standout)
+            script = clubmod.say_name(
+                ea.enforce_grade_word((resp.choices[0].message.content or "").strip(), standout),
+                str(m.get("name") or ""))
             cap = min(max_words, vc.word_cap(voice.value))
             if ramped:
                 audio, _ = await vc.speak_ramped(
@@ -1127,7 +1132,7 @@ async def _compare_clip(voice: str, block: str, win: str, lose: str) -> tuple[by
                 elif with_kid:
                     turns = vc.parse_narrator_script(raw)
                     raw = f"NARRATOR: {turns[0][1]}" if turns else raw
-            script = clubmod.speakable(_lead_with_winner(raw, win, lose))
+            script = clubmod.speakable(clubmod.say_names(_lead_with_winner(raw, win, lose), (win, lose)))
             audio, _ = await vc.speak_narrator(script, max_words=vc.narrator_word_cap(with_kid))
             log_clip("narrator", " ".join(ln for _, ln in vc.parse_narrator_script(script)), audio)
             return audio, None
@@ -1141,7 +1146,8 @@ async def _compare_clip(voice: str, block: str, win: str, lose: str) -> tuple[by
             messages=[{"role": "system", "content": sys_prompt},
                       {"role": "user", "content": block}],
             max_tokens=220, temperature=0.9)
-        script = clubmod.speakable(_lead_with_winner((resp.choices[0].message.content or "").strip(), win, lose))
+        script = clubmod.speakable(clubmod.say_names(
+            _lead_with_winner((resp.choices[0].message.content or "").strip(), win, lose), (win, lose)))
         cap = min(max_words, vc.word_cap(voice))
         if ramped:
             audio, _ = await vc.speak_ramped(
@@ -1200,6 +1206,25 @@ async def club_autocomplete(interaction: discord.Interaction, current: str):
     return out[:25]
 
 
+CLUB_VOICE_RULE = """THIS CLIP IS A TAKE ON A CLUB, NOT A READOUT OF ITS CARD.
+Keep your voice and character. These rules OVERRIDE the player-report rules
+above (standout trait, grade words, position, numbers):
+
+- The card under this clip already shows every grade. Nobody needs you to
+  read it. Your job is the OPINION: what kind of team is this, would you
+  want to play them, how do you beat them.
+- Use THE STORY section as your material. Say what they ARE in one line,
+  then the one thing they do best and the one place they're soft, then how
+  you'd play them. Name their best player and say what he does. That's the
+  whole clip.
+- NEVER walk the skills one by one. NEVER say a list of grades. Tier words
+  (elite, stud, solid, mid, weak, bad, shitter) are the CARD's words: use at
+  most ONE in the whole clip, and only if it lands. Say what things mean
+  instead: "they can't be moved off the puck", "they don't finish".
+- At most ONE number, and only if it's the point. Never a percentile.
+- No player positions unless it matters, no stat labels, no box score."""
+
+
 TRUMP_CLUB_FLAVOR = """THIS ONE'S A CLUB, SO HAVE SOME FUN WITH IT. Hang a nickname on the
 club once, the way he brands an opponent ("Low-Energy Six Gang", "the
 so-called champions"), and give one or two roster guys a nickname off
@@ -1209,17 +1234,20 @@ still a scouting report with a verdict, not a stand-up set. Everything else
 about the numbers rules still holds."""
 
 
-async def _club_voice_file(voice, block: str, name: str = "") -> tuple[bytes | None, str | None]:
-    """A clip reading the club block in the chosen voice: (audio, error),
-    one of them set.
+async def _club_voice_file(voice, s: dict) -> tuple[bytes | None, str | None]:
+    """A clip with a TAKE on the club in the chosen voice: (audio, error),
+    one of them set. The voice gets club.voice_block(s) (story first, facts
+    as reference) plus CLUB_VOICE_RULE, never the card read's grade table.
     Same voices and length rules as /pubscout; the prompts get told it's a
     team, not a player, since the scout prompts were written for one guy."""
     team_note = ("This report is about a CLUB (a whole team and its roster), not one player. "
-                 "Talk about the team; name a player or two from the roster if it helps. "
                  "EASHL has no lines and no line changes -- one human per position all game -- "
                  "so never say 'top line', 'depth' or 'line changes'. "
                  "Say a record the way a broadcaster does -- \"fifty, four and one\" -- never "
-                 "with dashes, and never as a date.")
+                 "with dashes, and never as a date.\n\n" + CLUB_VOICE_RULE)
+    block = clubmod.voice_block(s)
+    name = s["name"]
+    names = [name] + [r["name"] for r in s["skaters"][:8]] + [r["name"] for r in s["goalies"][:2]]
     try:
         if voice.value == "narrator":
             with_kid = random.random() < vc.NARRATOR_KID_PROB
@@ -1238,7 +1266,7 @@ async def _club_voice_file(voice, block: str, name: str = "") -> tuple[bytes | N
                 elif with_kid:
                     turns = vc.parse_narrator_script(raw)
                     raw = f"NARRATOR: {turns[0][1]}" if turns else raw
-            raw = clubmod.speakable(clubmod.say_name(raw, name))
+            raw = clubmod.speakable(clubmod.say_names(raw, names))
             audio, _ = await vc.speak_narrator(raw, max_words=vc.narrator_word_cap(with_kid))
             log_clip("narrator", " ".join(ln for _, ln in vc.parse_narrator_script(raw)), audio)
             return audio, None
@@ -1252,8 +1280,8 @@ async def _club_voice_file(voice, block: str, name: str = "") -> tuple[bytes | N
         resp = await call_llm(messages=[{"role": "system", "content": sys_prompt},
                                         {"role": "user", "content": block}],
                               max_tokens=220, temperature=0.9)
-        script = clubmod.speakable(clubmod.say_name(
-            (resp.choices[0].message.content or "").strip(), name))
+        script = clubmod.speakable(clubmod.say_names(
+            (resp.choices[0].message.content or "").strip(), names))
         cap = min(max_words, vc.word_cap(voice.value))
         if ramped:
             audio, _ = await vc.speak_ramped(
@@ -1327,7 +1355,7 @@ async def clubscout(interaction: discord.Interaction, club: str,
     # until the clip is done so they land together; meanwhile the channel
     # gets a one-line heads-up that both are coming (Matt's ask), which the
     # finished card + clip then replace in place.
-    voice_task = asyncio.create_task(_club_voice_file(voice, block, s["name"])) if voice else None
+    voice_task = asyncio.create_task(_club_voice_file(voice, s)) if voice else None
     placeholder = None
     if voice_task:
         try:
