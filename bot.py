@@ -18,6 +18,7 @@ import ea
 import harvest
 import scout
 import voice as vc
+import duo
 from aiohttp import web
 
 load_dotenv()
@@ -400,10 +401,11 @@ Usually answer in 1-4 short paragraphs."""
 
 llm = AsyncOpenAI(api_key=OPENROUTER_API_KEY or "missing", base_url="https://openrouter.ai/api/v1")
 
-async def call_llm(messages, max_tokens=500, temperature=0.8, model=None):
+async def call_llm(messages, max_tokens=500, temperature=0.8, model=None, extra_body=None):
     try:
         resp = await llm.chat.completions.create(
             model=model or MODEL, messages=messages, max_tokens=max_tokens, temperature=temperature,
+            **({"extra_body": extra_body} if extra_body else {}),
         )
         # OpenRouter can return 200 with an error body (free-tier throttling
         # does this) -- the SDK parses it as choices=None instead of raising
@@ -724,6 +726,50 @@ async def ask_narrator(interaction: discord.Interaction, question: str):
         )
         return
     clip = clip_file(audio, "ask-narrator")
+    await interaction.followup.send(f"**Q:** {question}"[:2000], file=clip)
+
+@tree.command(name="ask-chiclets", description="Ask anything, answered by Biz and Whit")
+@app_commands.describe(question="What do you want to know?")
+async def ask_chiclets(interaction: discord.Interaction, question: str):
+    """Biz & Whit riff on the question in one two-voice clip (duo.py)."""
+    await interaction.response.defer()
+    question, people = await resolve_mentions(interaction, question)
+    note = await player_note(people)
+    msgs = [
+        {"role": "system", "content": duo.PROMPT},
+        *([{"role": "system", "content": note}] if note else []),
+        {"role": "user", "content": question},
+    ]
+    try:
+        resp = await call_llm(messages=msgs, max_tokens=duo.MAX_TOKENS, temperature=0.8,
+                              model=duo.WRITER, extra_body=duo.REASONING)
+        script = (resp.choices[0].message.content or "").strip()
+        if duo.needs_retry(script):
+            fix = msgs + [
+                {"role": "assistant", "content": script},
+                {"role": "user", "content": "Wrong format. Four to six turns, both men talking, "
+                 "every line starting BIZ: or WHIT: -- nothing else on the page."},
+            ]
+            resp = await call_llm(messages=fix, max_tokens=duo.MAX_TOKENS, temperature=0.85,
+                                  model=duo.WRITER, extra_body=duo.REASONING)
+            retry = (resp.choices[0].message.content or "").strip()
+            if not duo.needs_retry(retry):
+                script = retry
+    except Exception as e:
+        await interaction.followup.send(f"OpenRouter shit the bed: `{type(e).__name__}: {e}`")
+        return
+    if duo.needs_retry(script):
+        await interaction.followup.send(f"**Q:** {question}\nBiz and Whit fumbled that one. Try again."[:2000])
+        return
+    try:
+        audio = await duo.speak(script)
+        print(f"[chiclets] {len(audio)} bytes, ~{len(audio) / 88200:.0f}s, {len(duo.turns(script))} turns")
+    except Exception as e:
+        await interaction.followup.send(
+            f"Voice shit the bed: `{type(e).__name__}: {e}`\n\n**Q:** {question}\n{duo.spoken_text(script)}"[:2000]
+        )
+        return
+    clip = discord.File(io.BytesIO(audio), filename=f"{CLIP_BRAND}-ask-chiclets.wav")
     await interaction.followup.send(f"**Q:** {question}"[:2000], file=clip)
 
 # The card shows every number already, so the read exists to say what they
@@ -1796,13 +1842,14 @@ async def rebuild_pool_cmd(interaction: discord.Interaction):
 
 HELP = """**ChelScout Pubs**
 
-**Ask a voice something** -- one question in, a clip back. Same for all six.
+**Ask a voice something** -- one question in, a clip back. Same for all seven.
 `/ask-buddy` -- the Canadian hockey guy
 `/ask-trump` -- Trump
 `/ask-cherry` -- Don Cherry
 `/ask-torts` -- Tortorella, mid-presser
 `/ask-gilbert` -- Gilbert Gottfried
 `/ask-narrator` -- a 1940s classroom filmstrip, with the kid butting in
+`/ask-chiclets` -- Biz and Whit, Spittin' Chiclets style
 
 **Scout a player**
 `/pubscout <gamertag>` -- the stat card and a written read.
